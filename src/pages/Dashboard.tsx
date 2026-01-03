@@ -18,11 +18,9 @@ import {
   AlertTriangle,
   TrendingUp,
   SlidersHorizontal,
-  LogIn,
-  LogOut,
-  ShieldCheck,
   Gauge,
   RefreshCw,
+  Loader2,
 } from "lucide-react"
 import {
   BarChart,
@@ -70,7 +68,6 @@ type VisibleKpis = {
   maintenanceEff: boolean
   alerts: boolean
 }
-type AuthState = { isAuth: boolean; username: string | null }
 
 /* ===================== */
 /*       DASHBOARD       */
@@ -359,6 +356,12 @@ export default function Dashboard() {
       </div>
 
       {/* GRILLE KPI */}
+      {loadingKPIs && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Chargement des données...</span>
+        </div>
+      )}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {visibleKpis.speedAvg && (
           <KPICard title="Vitesse Moyenne" value={`${speedAvg.toFixed(1)} km/h`} subtitle="moyenne sur la période" trend={{ value: loadingKPIs ? "…" : "", isPositive: true }} status="success" icon={<Gauge />} />
