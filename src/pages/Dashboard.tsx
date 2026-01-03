@@ -33,6 +33,7 @@ import {
   PieChart,
   Pie,
   Cell,
+  Legend,
 } from "recharts"
 import { api } from "@/lib/api"
 
@@ -422,10 +423,12 @@ export default function Dashboard() {
             <ResponsiveContainer width="100%" height={300}>
               <PieChart>
                 <Pie data={statusPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80}
-                     label={({ name, value, percent }) => `${name}: ${value} (${(percent * 100).toFixed(0)}%)`}>
+                     label={({ value, percent }) => `${value} (${(percent * 100).toFixed(0)}%)`}
+                     style={{ fontSize: '13px' }}>
                   {statusPie.map((e, i) => <Cell key={i} fill={e.color} />)}
                 </Pie>
                 <Tooltip />
+                <Legend />
               </PieChart>
             </ResponsiveContainer>
           </CardContent>
@@ -440,11 +443,13 @@ export default function Dashboard() {
                 <Pie
                   data={violationsPie}
                   dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={80}
-                  label={({ name, value }) => `${name}: ${value}`}
+                  label={({ value, percent }) => `${value} (${(percent * 100).toFixed(0)}%)`}
+                  style={{ fontSize: '13px' }}
                 >
                   {violationsPie.map((e, i) => <Cell key={i} fill={e.color} />)}
                 </Pie>
                 <Tooltip />
+                <Legend />
               </PieChart>
             </ResponsiveContainer>
           </CardContent>
