@@ -3,15 +3,12 @@ type Creds = { username: string; password: string };
 
 /* ===================== Session creds ===================== */
 function loadCreds(): Creds | null {
-  try {
-    const raw = sessionStorage.getItem("fleet_auth");
-    if (!raw) return null;
-    const p = JSON.parse(raw);
-    if (p?.isAuth && p?.username && p?.password) {
-      return { username: p.username, password: p.password };
-    }
-  } catch {}
-  return null;
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token');
+  return  {
+      password: token || '',
+      username: ''
+  }
 }
 
 /* ===================== HTTP helpers ===================== */

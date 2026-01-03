@@ -62,8 +62,8 @@ const upstream = axios.create({
    Helpers
 ========================= */
 function makeBasicHeader(u, p) {
-  if (!u || !p) return null;
-  return "Basic " + Buffer.from(`${u}:${p}`).toString("base64");
+  if (!p) return null;
+  return "JSESSIONID=" + p;
 }
 const asArr = (d) => (Array.isArray(d) ? d : d ? [d] : []);
 function companyFromUsername(u = "") {
@@ -130,7 +130,7 @@ const CONCURRENCY = Number(process.env.UPSTREAM_CONCURRENCY || 10);
 async function getDevices(auth) {
   const key = cacheKey("devices", auth);
   return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/devices", { headers: { Authorization: auth }, params: { all: true } });
+    const r = await upstream.get("/devices", { headers: { Cookie: auth }, params: { all: true } });
     if (r.status >= 400) throw new Error(`devices ${r.status}`);
     return asArr(r.data);
   });
@@ -138,7 +138,7 @@ async function getDevices(auth) {
 async function getGroups(auth) {
   const key = cacheKey("groups", auth);
   return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/groups", { headers: { Authorization: auth }, params: { all: true } });
+    const r = await upstream.get("/groups", { headers: { Cookie: auth }, params: { all: true } });
     if (r.status >= 400) throw new Error(`groups ${r.status}`);
     return asArr(r.data);
   });
@@ -146,7 +146,7 @@ async function getGroups(auth) {
 async function getNotifications(auth) {
   const key = cacheKey("notifications", auth);
   return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/notifications", { headers: { Authorization: auth }, params: { all: true } });
+    const r = await upstream.get("/notifications", { headers: { Cookie: auth }, params: { all: true } });
     if (r.status >= 400) return [];
     return asArr(r.data);
   });
@@ -154,7 +154,7 @@ async function getNotifications(auth) {
 async function getGeofences(auth) {
   const key = cacheKey("geofences", auth);
   return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/geofences", { headers: { Authorization: auth }, params: { all: true } });
+    const r = await upstream.get("/geofences", { headers: { Cookie: auth }, params: { all: true } });
     if (r.status >= 400) return [];
     return asArr(r.data);
   });
@@ -162,7 +162,7 @@ async function getGeofences(auth) {
 async function getTrips(auth, deviceId, from, to) {
   const key = cacheKey("trips", auth, deviceId, from, to);
   return memo(key, DEFAULT_TTL.trips, async () => {
-    const r = await upstream.get("/reports/trips", { headers: { Authorization: auth }, params: { deviceId, from, to } });
+    const r = await upstream.get("/reports/trips", { headers: { Cookie: auth }, params: { deviceId, from, to } });
     if (r.status >= 400) return [];
     return asArr(r.data);
   });
@@ -170,7 +170,7 @@ async function getTrips(auth, deviceId, from, to) {
 async function getEvents(auth, deviceId, from, to) {
   const key = cacheKey("events", auth, deviceId, from, to);
   return memo(key, DEFAULT_TTL.events, async () => {
-    const r = await upstream.get("/reports/events", { headers: { Authorization: auth }, params: { deviceId, from, to } });
+    const r = await upstream.get("/reports/events", { headers: { Cookie: auth }, params: { deviceId, from, to } });
     if (r.status >= 400) return [];
     return asArr(r.data);
   });
@@ -178,7 +178,7 @@ async function getEvents(auth, deviceId, from, to) {
 async function getMaint(auth, deviceId) {
   const key = cacheKey("maint", auth, deviceId);
   return memo(key, DEFAULT_TTL.maint, async () => {
-    const r = await upstream.get("/maintenance", { headers: { Authorization: auth }, params: { deviceId } });
+    const r = await upstream.get("/maintenance", { headers: { Cookie: auth }, params: { deviceId } });
     if (r.status >= 400) return [];
     return asArr(r.data);
   });
@@ -192,7 +192,7 @@ app.post("/api/login", async (req, res) => {
   const auth = makeBasicHeader(username, password);
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   try {
-    const r = await upstream.get(TEST_PATH, { headers: { Authorization: auth }, params: { all: true } });
+    const r = await upstream.get(TEST_PATH, { headers: { Cookie: auth }, params: { all: true } });
     if (r.status >= 400) {
       const status = r.status;
       if (status === 401 || status === 403) return res.status(status).json({ ok: false, error: "invalid_credentials", status });
@@ -441,7 +441,7 @@ async function loadCompanyState(company) {
   const key = keyForCompany(company);
   const auth = adminAuthHeader();
 
-  const list = await upstream.get("/attributes/computed", { headers: { Authorization: auth }, params: { all: true } });
+  const list = await upstream.get("/attributes/computed", { headers: { Cookie: auth }, params: { all: true } });
   if (list.status >= 400) throw new Error(`pinme_list_failed_${list.status}`);
 
   const found = asArr(list.data).find((a) => String(a?.attribute) === key);
@@ -455,14 +455,14 @@ async function createCompanyState(company, initialObj = {}) {
   const key = keyForCompany(company);
   const auth = adminAuthHeader();
   const payload = { attribute: key, description: "Fleet Alerts State (shared by company)", expression: JSON.stringify(initialObj || {}) };
-  const r = await upstream.post("/attributes/computed", payload, { headers: { Authorization: auth } });
+  const r = await upstream.post("/attributes/computed", payload, { headers: { Cookie: auth } });
   if (r.status >= 400) throw new Error(`pinme_create_failed_${r.status}`);
   const id = Number(r.data?.id);
   return { id: Number.isFinite(id) ? id : null, state: initialObj || {} };
 }
 async function updateCompanyState(id, obj) {
   const auth = adminAuthHeader();
-  const r = await upstream.put(`/attributes/computed/${id}`, { expression: JSON.stringify(obj || {}) }, { headers: { Authorization: auth } });
+  const r = await upstream.put(`/attributes/computed/${id}`, { expression: JSON.stringify(obj || {}) }, { headers: { Cookie: auth } });
   if (r.status >= 400) throw new Error(`pinme_update_failed_${r.status}`);
   return true;
 }

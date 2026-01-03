@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { KPICard } from "@/components/KPICard"
 import { FilterComparisonBlock } from "@/components/FilterComparisonBlock"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -71,95 +71,6 @@ type VisibleKpis = {
   alerts: boolean
 }
 type AuthState = { isAuth: boolean; username: string | null }
-
-/* ===================== */
-/*        LOGIN BAR      */
-/* ===================== */
-function LoginBar({ onLogged }: { onLogged?: () => void }) {
-  const [username, setUsername] = useState("")
-  const [password, setPassword] = useState("")
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [auth, setAuth] = useState<AuthState>({ isAuth: false, username: null })
-
-  useEffect(() => {
-    try {
-      const saved = sessionStorage.getItem("fleet_auth")
-      if (saved) {
-        const p = JSON.parse(saved)
-        if (p?.isAuth && p?.username) setAuth({ isAuth: true, username: p.username })
-      }
-    } catch {}
-  }, [])
-
-  const saveSession = (u: string, p: string) =>
-    sessionStorage.setItem("fleet_auth", JSON.stringify({ isAuth: true, username: u, password: p }))
-
-  const onLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError(null)
-    setLoading(true)
-    try {
-      await api.login(username, password)
-      saveSession(username, password)
-      setAuth({ isAuth: true, username })
-      setPassword("")
-      onLogged?.()
-    } catch (err: any) {
-      setError(err?.message || "Erreur de connexion")
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const onLogout = () => {
-    sessionStorage.removeItem("fleet_auth")
-    setAuth({ isAuth: false, username: null })
-    setUsername("")
-    setPassword("")
-    setError(null)
-  }
-
-  return (
-    <Card className="mb-6">
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2">
-          <ShieldCheck className="h-5 w-5" />
-          Accès – Authentification
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3 md:flex-row md:items-end md:gap-4">
-        {!auth.isAuth ? (
-          <>
-            <div className="w-full md:w-56">
-              <label className="block text-sm mb-1">Nom d’utilisateur</label>
-              <Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="ex: john.doe" autoComplete="username" />
-            </div>
-            <div className="w-full md:w-56">
-              <label className="block text-sm mb-1">Mot de passe</label>
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" autoComplete="current-password" />
-            </div>
-            <Button onClick={onLogin} disabled={loading} className="flex items-center gap-2">
-              <LogIn className="h-4 w-4" />
-              {loading ? "Connexion..." : "Se connecter"}
-            </Button>
-            {error && <span className="text-sm text-danger mt-2 md:mt-0">{error}</span>}
-          </>
-        ) : (
-          <div className="flex w-full items-center justify-between">
-            <div className="text-sm">
-              Connecté en tant que <span className="font-semibold">{auth.username}</span>
-            </div>
-            <Button variant="outline" onClick={onLogout} className="flex items-center gap-2">
-              <LogOut className="h-4 w-4" />
-              Se déconnecter
-            </Button>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
 
 /* ===================== */
 /*       DASHBOARD       */
@@ -382,15 +293,8 @@ export default function Dashboard() {
     }
   }
 
-  const isAlreadyLogged = useMemo(() => {
-    try {
-      const saved = sessionStorage.getItem("fleet_auth")
-      if (!saved) return false
-      const p = JSON.parse(saved)
-      return !!(p?.isAuth && p?.username && p?.password)
-    } catch { return false }
-  }, [])
-  useEffect(() => { if (isAlreadyLogged) fetchAll() }, [isAlreadyLogged])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchAll() }, [])
 
   /* Données pour les 2 pie charts (à partir des comptages) */
   const statusPie = [
@@ -408,7 +312,6 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <LoginBar onLogged={() => fetchAll()} />
 
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <h1 className="text-3xl font-bold">Tableau de Bord</h1>
