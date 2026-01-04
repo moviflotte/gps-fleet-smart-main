@@ -15,15 +15,6 @@ import { fr } from "date-fns/locale"
 import { api } from "@/lib/api"
 import MultiSelect, { Option } from "@/components/MultiSelect"
 
-/* ---------------- Helpers ---------------- */
-function isLogged() {
-  try {
-    const raw = sessionStorage.getItem("fleet_auth")
-    if (!raw) return false
-    const p = JSON.parse(raw)
-    return !!(p?.isAuth && p?.username && p?.password)
-  } catch { return false }
-}
 function getGroupIdFromDevice(d: any): string | null {
   const gid = d?.groupId ?? d?.group_id ?? d?.group?.id ?? d?.attributes?.groupId ?? null
   return gid != null ? String(gid) : null
@@ -95,7 +86,6 @@ export function FilterComparisonBlock() {
 
   /* Charger groupes + devices après login */
   useEffect(() => {
-    if (!isLogged()) return
     setListsLoading(true); setListsError(null)
     ;(async () => {
       try {
@@ -269,7 +259,7 @@ export function FilterComparisonBlock() {
               value={selectedGroupIds}
               onChange={setSelectedGroupIds}
               placeholder="Tous les groupes"
-              disabled={!isLogged() || listsLoading}
+              disabled={listsLoading}
             />
           </div>
 
@@ -280,7 +270,7 @@ export function FilterComparisonBlock() {
               value={selectedDeviceIds}
               onChange={setSelectedDeviceIds}
               placeholder="Tous les véhicules"
-              disabled={!isLogged() || listsLoading}
+              disabled={listsLoading}
             />
           </div>
 
