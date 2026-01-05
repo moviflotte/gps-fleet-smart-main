@@ -212,9 +212,9 @@ export default function Alerts() {
   }, [])
 
   useEffect(() => {
-    if (isAlreadyLogged) fetchFromServer()
+    fetchFromServer()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAlreadyLogged])
+  }, [])
 
   /* --- Mapping label → type --- */
   function labelToType(label: string): AlertType {
