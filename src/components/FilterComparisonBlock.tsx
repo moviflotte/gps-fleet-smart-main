@@ -274,14 +274,14 @@ export function FilterComparisonBlock() {
             />
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-2 md:col-span-2">
             <Label>Période</Label>
             <div className="flex gap-2">
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full justify-start text-left text-xs">
-                    <CalendarIcon className="mr-1 h-3 w-3" />
-                    {dateFrom ? format(dateFrom, "dd/MM", { locale: fr }) : "Début"}
+                  <Button variant="outline" className="w-full justify-start text-left text-xs whitespace-nowrap">
+                    <CalendarIcon className="mr-1 h-3 w-3 shrink-0" />
+                    {dateFrom ? format(dateFrom, "dd/MM HH:mm", { locale: fr }) : "Début"}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0">
@@ -290,9 +290,9 @@ export function FilterComparisonBlock() {
               </Popover>
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full justify-start text-left text-xs">
-                    <CalendarIcon className="mr-1 h-3 w-3" />
-                    {dateTo ? format(dateTo, "dd/MM", { locale: fr }) : "Fin"}
+                  <Button variant="outline" className="w-full justify-start text-left text-xs whitespace-nowrap">
+                    <CalendarIcon className="mr-1 h-3 w-3 shrink-0" />
+                    {dateTo ? format(dateTo, "dd/MM HH:mm", { locale: fr }) : "Fin"}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0">
