@@ -167,6 +167,14 @@ async function getTrips(auth, deviceId, from, to) {
     return asArr(r.data);
   });
 }
+async function getSummary(auth, deviceId, from, to) {
+  const key = cacheKey("summary", auth, deviceId, from, to);
+  return memo(key, DEFAULT_TTL.trips, async () => {
+    const r = await upstream.get("/reports/summary", { headers: { Cookie: auth }, params: { deviceId, from, to } });
+    if (r.status >= 400) return [];
+    return asArr(r.data);
+  });
+}
 async function getEvents(auth, deviceId, from, to) {
   const key = cacheKey("events", auth, deviceId, from, to);
   return memo(key, DEFAULT_TTL.events, async () => {
@@ -236,6 +244,11 @@ async function fetchTripsForDevices(auth, deviceIds, from, to) {
   return new Map(entries);
 }
 
+async function fetchSummaryForDevices(auth, deviceIds, from, to) {
+  const entries = await runPool(deviceIds, CONCURRENCY, async (id) => [id, await getSummary(auth, id, from, to)]);
+  return new Map(entries);
+}
+
 app.post("/api/reports/average-speed", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
   const auth = makeBasicHeader(username, password);
@@ -244,17 +257,15 @@ app.post("/api/reports/average-speed", async (req, res) => {
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
 
   try {
-    const tripsByDevice = await fetchTripsForDevices(auth, deviceIds, from, to);
+    const summaryByDevice = await fetchSummaryForDevices(auth, deviceIds, from, to);
     let sum = 0, count = 0, used = new Set();
-    for (const [id, trips] of tripsByDevice) {
-      let local = 0, n = 0;
-      for (const t of trips) {
-        const v = Number(t?.averageSpeed);
-        if (Number.isFinite(v)) { local += v; n++; }
+    for (const [id, summaries] of summaryByDevice) {
+      for (const s of summaries) {
+        const v = Number(s?.averageSpeed);
+        if (Number.isFinite(v)) { sum += v; count++; used.add(id); }
       }
-      if (n > 0) { sum += local; count += n; used.add(id); }
     }
-    res.json({ ok: true, averageSpeed: count ? sum / count : 0, tripsCount: count, devicesCountUsed: used.size });
+    res.json({ ok: true, averageSpeed: count ? sum / count : 0, summaryCount: count, devicesCountUsed: used.size });
   } catch (e) {
     res.status(500).json({ ok: false, error: "avg_speed_failed", detail: e.message });
   }
@@ -302,22 +313,29 @@ app.post("/api/reports/avg-fuel", async (req, res) => {
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
 
   try {
-    const tripsByDevice = await fetchTripsForDevices(auth, deviceIds, from, to);
-    let sumFuel = 0, tripsCount = 0, used = new Set();
+    const summaryByDevice = await fetchSummaryForDevices(auth, deviceIds, from, to);
+    let totalFuel = 0, totalDistance = 0, summaryCount = 0, used = new Set();
     const clamp = (x) => {
       const v = Number(x);
       if (!Number.isFinite(v)) return null;
       return v < 0 ? 0 : v;
     };
-    for (const [id, trips] of tripsByDevice) {
-      if (trips.length) used.add(id);
-      for (const t of trips) {
-        const v = clamp(t?.spentFuel);
-        if (v !== null) { sumFuel += v; tripsCount++; }
+    for (const [id, summaries] of summaryByDevice) {
+      if (summaries.length) used.add(id);
+      for (const s of summaries) {
+        const fuel = clamp(s?.spentFuel);
+        const distance = clamp(s?.distance);
+        if (fuel !== null && distance !== null) {
+          totalFuel += fuel;
+          totalDistance += distance;
+          summaryCount++;
+        }
       }
     }
-    if (sumFuel < 0) sumFuel = 0;
-    res.json({ ok: true, averageFuel: tripsCount ? sumFuel / tripsCount : 0, totalFuel: sumFuel, tripsCount, devicesCountUsed: used.size });
+    // Calculate L/100km: (totalFuel * 100) / (totalDistance / 1000)
+    const distanceKm = totalDistance / 1000;
+    const avgConsumption = distanceKm > 0 ? (totalFuel * 100) / distanceKm : 0;
+    res.json({ ok: true, avgConsumption, totalFuel, totalDistanceKm: distanceKm, summaryCount, devicesCountUsed: used.size });
   } catch (e) {
     res.status(500).json({ ok: false, error: "avg_fuel_failed", detail: e.message });
   }
@@ -880,19 +898,21 @@ app.post("/api/reports/total-distance", async (req, res) => {
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
 
   try {
-    const tripsByDevice = await fetchTripsForDevices(auth, deviceIds, from, to);
-    let totalKm = 0;
+    const summaryByDevice = await fetchSummaryForDevices(auth, deviceIds, from, to);
+    let totalDistance = 0, summaryCount = 0, used = new Set();
 
-    for (const [, trips] of tripsByDevice) {
-      for (const t of trips) {
-        // PinMe renvoie souvent distance en mètres ; sinon distanceKm
-        const m = Number(t?.distance);
-        const kmField = Number(t?.distanceKm);
-        if (Number.isFinite(m)) totalKm += m / 1000;
-        else if (Number.isFinite(kmField)) totalKm += kmField;
+    for (const [id, summaries] of summaryByDevice) {
+      if (summaries.length) used.add(id);
+      for (const s of summaries) {
+        const distance = Number(s?.distance);
+        if (Number.isFinite(distance) && distance > 0) {
+          totalDistance += distance;
+          summaryCount++;
+        }
       }
     }
-    res.json({ ok: true, totalKm: Math.max(0, totalKm) });
+    const totalKm = totalDistance / 1000;
+    res.json({ ok: true, totalKm: Math.max(0, totalKm), summaryCount, devicesCountUsed: used.size });
   } catch (e) {
     res.status(500).json({ ok: false, error: "total_distance_failed", detail: e.message });
   }
@@ -918,7 +938,7 @@ app.post("/api/reports/maintenance-efficiency", async (req, res) => {
     }
 
     const efficiency = total > 0 ? (ok / total) * 100 : 0;
-    res.json({ ok: true, efficiency, total, ok });
+    res.json({ ok: true, efficiency, total });
   } catch (e) {
     res.status(500).json({ ok: false, error: "maint_eff_failed", detail: e.message });
   }
