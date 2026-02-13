@@ -290,7 +290,6 @@ app.post("/api/reports/max-speed", async (req, res) => {
         if (Number.isFinite(v)) {
           tripsCount++;
           if (v > maxSpeed) {
-            console.log(maxSpeed)
             maxSpeed = v;
             meta = {
               deviceId: t?.deviceId ?? id,
