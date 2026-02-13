@@ -264,8 +264,8 @@ app.post("/api/reports/average-speed", async (req, res) => {
       used.add(id);
       allTrips.push(...trips);
     }
-    const values = allTrips.map(item => Math.round(item.averageSpeed * 1.85200) * item.totalKms);
-    const totalKms = allTrips.reduce((a, b) => a + b.totalKms, 0);
+    const values = allTrips.map(item => Math.round(item.averageSpeed * 1.85200) * (item.distance/1000));
+    const totalKms = allTrips.reduce((a, b) => a + (b.distance/1000), 0);
     const averageSpeed = totalKms > 0 ? Math.round((values.reduce((a, b) => a + b, 0)) / totalKms) : 0;
     res.json({ ok: true, averageSpeed, summaryCount: allTrips.length, devicesCountUsed: used.size });
   } catch (e) {
