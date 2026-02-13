@@ -265,7 +265,7 @@ app.post("/api/reports/average-speed", async (req, res) => {
         if (Number.isFinite(v)) { sum += v; count++; used.add(id); }
       }
     }
-    res.json({ ok: true, averageSpeed: count ? sum / count : 0, summaryCount: count, devicesCountUsed: used.size });
+    res.json({ ok: true, averageSpeed: count ? (sum / count) * 1.852 : 0, summaryCount: count, devicesCountUsed: used.size });
   } catch (e) {
     res.status(500).json({ ok: false, error: "avg_speed_failed", detail: e.message });
   }
@@ -284,7 +284,6 @@ app.post("/api/reports/max-speed", async (req, res) => {
     for (const [id, trips] of tripsByDevice) {
       used.add(id);
       for (const t of trips) {
-        console.log(t)
         const v = Number(t?.maxSpeed);
         if (Number.isFinite(v)) {
           tripsCount++;
@@ -301,7 +300,7 @@ app.post("/api/reports/max-speed", async (req, res) => {
         }
       }
     }
-    res.json({ ok: true, maxSpeed, tripsCount, devicesCountUsed: used.size, meta });
+    res.json({ ok: true, maxSpeed: maxSpeed*1.852, tripsCount, devicesCountUsed: used.size, meta });
   } catch (e) {
     res.status(500).json({ ok: false, error: "max_speed_failed", detail: e.message });
   }
