@@ -257,17 +257,19 @@ app.post("/api/reports/average-speed", async (req, res) => {
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
 
   try {
-    const summaryByDevice = await fetchSummaryForDevices(auth, deviceIds, from, to);
-    let sum = 0, count = 0, used = new Set();
-    for (const [id, summaries] of summaryByDevice) {
-      for (const s of summaries) {
-        const v = Number(s?.averageSpeed);
-        if (Number.isFinite(v)) { sum += v; count++; used.add(id); }
-      }
+    const tripsByDevice = await fetchTripsForDevices(auth, deviceIds, from, to);
+    const allTrips = [];
+    const used = new Set();
+    for (const [id, trips] of tripsByDevice) {
+      used.add(id);
+      allTrips.push(...trips);
     }
-    res.json({ ok: true, averageSpeed: count ? ((sum / count) * 1.852) : 0, summaryCount: count, devicesCountUsed: used.size });
+    const values = allTrips.map(item => Math.round(item.averageSpeed * 1.85200) * item.totalKms);
+    const totalKms = allTrips.reduce((a, b) => a + b.totalKms, 0);
+    const averageSpeed = totalKms > 0 ? Math.round((values.reduce((a, b) => a + b, 0)) / totalKms) : 0;
+    res.json({ ok: true, averageSpeed, summaryCount: allTrips.length, devicesCountUsed: used.size });
   } catch (e) {
-    res.status(500).json({ ok: false, error: "avg_speed_failed", detail: e.message });
+    res.status(500).json({ ok: false, error: "max_speed_failed", detail: e.message });
   }
 });
 
