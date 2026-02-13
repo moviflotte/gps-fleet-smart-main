@@ -284,6 +284,7 @@ app.post("/api/reports/max-speed", async (req, res) => {
     for (const [id, trips] of tripsByDevice) {
       used.add(id);
       for (const t of trips) {
+        console.log(t)
         const v = Number(t?.maxSpeed);
         if (Number.isFinite(v)) {
           tripsCount++;
