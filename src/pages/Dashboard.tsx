@@ -205,7 +205,7 @@ export default function Dashboard() {
 
       setSpeedAvg(Number(avg?.averageSpeed || 0))
       setSpeedMax(Number(max?.maxSpeed || 0))
-      setFuelAvg(Number(fuel?.averageConsumption || 0))
+      setFuelAvg(Number(fuel?.avgConsumption || 0))
       setFuelTotal(Number(fuel?.totalFuel || 0))
       setActiveCount(Number(act?.count || 0))
       setDistanceTotalKm(Number(dist?.totalKm || 0))
