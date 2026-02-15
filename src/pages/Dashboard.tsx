@@ -371,10 +371,10 @@ export default function Dashboard() {
           <KPICard title="Vitesse Max" value={`${Math.round(speedMax)} km/h`} subtitle="pointée sur la période" trend={{ value: loadingKPIs ? "…" : "", isPositive: false }} status="warning" icon={<Gauge />} />
         )}
         {visibleKpis.fuelAvg && (
-          <KPICard title="Niveau Carburant Moyen" value={`${fuelAvg.toFixed(1)} L/trajet`} subtitle="moyenne trajets" trend={{ value: loadingKPIs ? "…" : "", isPositive: fuelAvg <= 0.5 }} status={fuelAvg <= 0.5 ? "success" : "warning"} icon={<Fuel />} />
+          <KPICard title="Consommation moyenne carburant au 100 km" value={`${fuelAvg.toFixed(2)} L/100km`} subtitle="moyenne trajets" trend={{ value: loadingKPIs ? "…" : "", isPositive: fuelAvg <= 0.5 }} status={fuelAvg <= 0.5 ? "success" : "warning"} icon={<Fuel />} />
         )}
         {visibleKpis.fuelTotal && (
-          <KPICard title="Consommation Totale" value={`${fuelTotal.toFixed(1)} L`} subtitle="sur la période" trend={{ value: loadingKPIs ? "…" : "", isPositive: false }} status="info" icon={<Fuel />} />
+          <KPICard title="Consommation Totale" value={`${fuelTotal.toFixed(2)} L`} subtitle="sur la période" trend={{ value: loadingKPIs ? "…" : "", isPositive: false }} status="info" icon={<Fuel />} />
         )}
         {visibleKpis.activeVehicles && (
           <KPICard title="Véhicules actifs" value={`${activeCount}/${totalDevices}`} subtitle="ont roulé sur la période" trend={{ value: loadingKPIs ? "…" : "", isPositive: true }} status="success" icon={<Truck />} />
