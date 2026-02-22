@@ -52,6 +52,18 @@ type Row = {
   efficiencyPct: number    // 0..100 (heuristique)
 }
 
+type GroupRow = {
+  groupId: string
+  groupName: string
+  vehicleCount: number
+  consumption: number
+  alerts: number
+  maintenanceStatus: "OK" | "En retard"
+  temperature: number
+  distanceKm: number
+  efficiencyPct: number
+}
+
 /* ---- petit pool de concurrence pour éviter 200 appels simultanés ---- */
 async function runPool<T>(jobs: (() => Promise<T>)[], concurrency = 6): Promise<T[]> {
   const results: T[] = []
@@ -89,7 +101,8 @@ export function FilterComparisonBlock() {
   const [listsError, setListsError] = useState<string | null>(null)
 
   /* Résultats / état */
-  const [rows, setRows] = useState<Row[]>([])
+  const [vehicleRows, setVehicleRows] = useState<Row[]>([])
+  const [groupRows, setGroupRows] = useState<GroupRow[]>([])
   const [tableLoading, setTableLoading] = useState(false)
   const [tableError, setTableError] = useState<string | null>(null)
 
@@ -120,7 +133,7 @@ export function FilterComparisonBlock() {
     [devices]
   )
 
-  /* Set d’IDs device à utiliser (selon filtres) */
+  /* Set d'IDs device à utiliser (selon filtres) */
   const selectedDeviceSet = useMemo(() => {
     if (selectedDeviceIds.length > 0) {
       return new Set(selectedDeviceIds.map(String))
@@ -150,7 +163,8 @@ export function FilterComparisonBlock() {
       const deviceIds = Array.from(selectedDeviceSet).map((id) => Number(id)).filter(Number.isFinite)
 
       if (deviceIds.length === 0) {
-        setRows([])
+        setVehicleRows([])
+        setGroupRows([])
         setTableLoading(false)
         return
       }
@@ -200,8 +214,7 @@ export function FilterComparisonBlock() {
         const maintenanceStatus: "OK" | "En retard" = "OK"
         const temperature = 0
 
-        // petite heuristique pour un score d’efficacité
-        // (tu peux remplacer par une vraie métrique serveur plus tard)
+        // petite heuristique pour un score d'efficacité
         let score = 100
         if (lper100 > 30) score -= 40
         else if (lper100 > 20) score -= 20
@@ -225,7 +238,77 @@ export function FilterComparisonBlock() {
       })
 
       const rowsRes = await runPool(jobs, 6)
-      setRows(rowsRes.filter(Boolean) as Row[])
+      const validRows = rowsRes.filter(Boolean) as Row[]
+      setVehicleRows(validRows)
+
+      // 3) ✅ NOUVEAU: Calculer les agrégations par groupe
+      if (selectedGroupIds.length > 0) {
+        const groupStats = new Map<string, {
+          vehicles: Row[]
+          totalDistance: number
+          totalFuel: number
+          totalAlerts: number
+          totalEfficiency: number
+        }>()
+
+        // Regrouper les véhicules par groupe
+        for (const row of validRows) {
+          const gid = row.groupName ? 
+            Array.from(groupNameById.entries()).find(([_, name]) => name === row.groupName)?.[0] || 'unknown'
+            : 'unknown'
+          
+          if (!groupStats.has(gid)) {
+            groupStats.set(gid, {
+              vehicles: [],
+              totalDistance: 0,
+              totalFuel: 0,
+              totalAlerts: 0,
+              totalEfficiency: 0
+            })
+          }
+
+          const stats = groupStats.get(gid)!
+          stats.vehicles.push(row)
+          stats.totalDistance += row.distanceKm
+          stats.totalAlerts += row.alerts
+          stats.totalEfficiency += row.efficiencyPct
+          
+          // Calculer le fuel total à partir de L/100km
+          if (row.distanceKm > 0 && row.consumption > 0) {
+            stats.totalFuel += (row.consumption * row.distanceKm) / 100
+          }
+        }
+
+        // Créer les lignes de groupe
+        const groupRowsData: GroupRow[] = []
+        for (const [gid, stats] of groupStats.entries()) {
+          const vehicleCount = stats.vehicles.length
+          if (vehicleCount === 0) continue
+
+          const avgConsumption = stats.totalDistance > 0 
+            ? (stats.totalFuel / stats.totalDistance) * 100 
+            : 0
+
+          const hasOverdueMaintenance = stats.vehicles.some(v => v.maintenanceStatus === "En retard")
+
+          groupRowsData.push({
+            groupId: gid,
+            groupName: groupNameById.get(gid) || `Groupe ${gid}`,
+            vehicleCount,
+            consumption: avgConsumption,
+            alerts: stats.totalAlerts,
+            maintenanceStatus: hasOverdueMaintenance ? "En retard" : "OK",
+            temperature: 0, // Average or placeholder
+            distanceKm: stats.totalDistance,
+            efficiencyPct: stats.totalEfficiency / vehicleCount
+          })
+        }
+
+        setGroupRows(groupRowsData)
+      } else {
+        setGroupRows([])
+      }
+
     } catch (e: any) {
       setTableError(e?.message || "Erreur lors du calcul des métriques")
     } finally {
@@ -233,11 +316,35 @@ export function FilterComparisonBlock() {
     }
   }
 
-  // Options d’affichage
+  // Options d'affichage
   const effBadge = (pct: number) =>
     pct >= 85 ? <Badge className="bg-success text-success-foreground">Excellent</Badge>
     : pct >= 70 ? <Badge className="bg-warning text-warning-foreground">Moyen</Badge>
     : <Badge className="bg-danger text-danger-foreground">Faible</Badge>
+
+  // ✅ NOUVEAU: Calculer les totaux
+  const vehicleTotals = useMemo(() => {
+    if (vehicleRows.length === 0) return null
+    return {
+      count: vehicleRows.length,
+      totalDistance: vehicleRows.reduce((sum, r) => sum + r.distanceKm, 0),
+      avgConsumption: vehicleRows.reduce((sum, r) => sum + r.consumption, 0) / vehicleRows.length,
+      totalAlerts: vehicleRows.reduce((sum, r) => sum + r.alerts, 0),
+      avgEfficiency: vehicleRows.reduce((sum, r) => sum + r.efficiencyPct, 0) / vehicleRows.length
+    }
+  }, [vehicleRows])
+
+  const groupTotals = useMemo(() => {
+    if (groupRows.length === 0) return null
+    return {
+      count: groupRows.length,
+      totalVehicles: groupRows.reduce((sum, r) => sum + r.vehicleCount, 0),
+      totalDistance: groupRows.reduce((sum, r) => sum + r.distanceKm, 0),
+      avgConsumption: groupRows.reduce((sum, r) => sum + r.consumption, 0) / groupRows.length,
+      totalAlerts: groupRows.reduce((sum, r) => sum + r.alerts, 0),
+      avgEfficiency: groupRows.reduce((sum, r) => sum + r.efficiencyPct, 0) / groupRows.length
+    }
+  }, [groupRows])
 
   return (
     <Card className="w-full">
@@ -252,9 +359,7 @@ export function FilterComparisonBlock() {
             {!listsLoading && (groups.length > 0 || devices.length > 0) && (
               <Badge variant="outline">{groups.length} groupes · {devices.length} véhicules</Badge>
             )}
-            <Button variant="outline" size="sm" onClick={() => (window.location.href = "/reports")}>
-              Rapports Détaillés
-            </Button>
+
           </div>
         </CardTitle>
       </CardHeader>
@@ -264,6 +369,7 @@ export function FilterComparisonBlock() {
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-info/5 rounded-lg border border-info/20">
           <div className="space-y-2">
             <Label>Groupes</Label>
+            {/* ✅ RECTIFICATION 1: Ajout du scroll via maxHeight dans MultiSelect */}
             <MultiSelect
               options={groupOptions}
               value={selectedGroupIds}
@@ -275,6 +381,7 @@ export function FilterComparisonBlock() {
 
           <div className="space-y-2">
             <Label>Véhicule Spécifique</Label>
+            {/* ✅ RECTIFICATION 1: Ajout du scroll via maxHeight dans MultiSelect */}
             <MultiSelect
               options={deviceOptions}
               value={selectedDeviceIds}
@@ -329,16 +436,104 @@ export function FilterComparisonBlock() {
 
         <Separator />
 
-        {/* Tableau */}
+        {/* ✅ RECTIFICATION 2: Tableau par groupe */}
+        {groupRows.length > 0 && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Comparaison par Groupe</h3>
+              <Badge variant="outline">{groupRows.length} groupes</Badge>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left p-3 font-medium">Groupe</th>
+                    <th className="text-left p-3 font-medium">Véhicules</th>
+                    <th className="text-left p-3 font-medium">
+                      <div className="flex items-center"><Fuel className="h-4 w-4 mr-1" /> Consommation (L/100km)</div>
+                    </th>
+                    <th className="text-left p-3 font-medium">
+                      <div className="flex items-center"><AlertTriangle className="h-4 w-4 mr-1" /> Alertes</div>
+                    </th>
+                    <th className="text-left p-3 font-medium">
+                      <div className="flex items-center"><Settings className="h-4 w-4 mr-1" /> Maintenance</div>
+                    </th>
+                    <th className="text-left p-3 font-medium">
+                      <div className="flex items-center"><Route className="h-4 w-4 mr-1" /> Distance (km)</div>
+                    </th>
+                    <th className="text-left p-3 font-medium">Efficacité</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groupRows.map((r, idx) => (
+                    <tr key={r.groupId} className={`border-b hover:bg-muted/50 ${idx % 2 === 0 ? "bg-muted/20" : ""}`}>
+                      <td className="p-3">
+                        <div className="flex items-center">
+                          <MapPin className="h-4 w-4 mr-2 text-muted-foreground" />
+                          <div className="font-medium">{r.groupName}</div>
+                        </div>
+                      </td>
+                      <td className="p-3">
+                        <Badge variant="secondary">{r.vehicleCount}</Badge>
+                      </td>
+                      <td className="p-3">
+                        <div className="flex items-center">
+                          <span className="font-medium">{r.consumption.toFixed(1)}</span>
+                          {r.consumption > 50
+                            ? <TrendingUp className="h-4 w-4 ml-2 text-danger" />
+                            : <TrendingDown className="h-4 w-4 ml-2 text-success" />
+                          }
+                        </div>
+                      </td>
+                      <td className="p-3">
+                        <Badge className={r.alerts > 10 ? "bg-danger text-danger-foreground" : "bg-success text-success-foreground"}>
+                          {r.alerts}
+                        </Badge>
+                      </td>
+                      <td className="p-3">
+                        {r.maintenanceStatus === "OK"
+                          ? <Badge className="bg-success text-success-foreground">OK</Badge>
+                          : <Badge className="bg-danger text-danger-foreground">En retard</Badge>}
+                      </td>
+                      <td className="p-3 font-medium">{Math.round(r.distanceKm).toLocaleString()}</td>
+                      <td className="p-3">{effBadge(r.efficiencyPct)}</td>
+                    </tr>
+                  ))}
+                  {/* ✅ RECTIFICATION 3: Ligne de totaux pour les groupes */}
+                  {groupTotals && (
+                    <tr className="border-t-2 bg-muted/40 font-semibold">
+                      <td className="p-3">TOTAL</td>
+                      <td className="p-3">
+                        <Badge variant="secondary">{groupTotals.totalVehicles}</Badge>
+                      </td>
+                      <td className="p-3">{groupTotals.avgConsumption.toFixed(1)}</td>
+                      <td className="p-3">
+                        <Badge className="bg-info text-info-foreground">{groupTotals.totalAlerts}</Badge>
+                      </td>
+                      <td className="p-3">—</td>
+                      <td className="p-3">{Math.round(groupTotals.totalDistance).toLocaleString()}</td>
+                      <td className="p-3">{effBadge(groupTotals.avgEfficiency)}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Tableau par véhicule */}
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold">Tableau Comparatif</h3>
+            <h3 className="text-lg font-semibold">
+              {selectedDeviceIds.length > 0 ? "Véhicules Sélectionnés" : "Tableau Comparatif par Véhicule"}
+            </h3>
             <div className="flex items-center space-x-2">
               <Button variant="outline" size="sm" disabled>
                 <ArrowUpDown className="h-4 w-4 mr-2" />
                 Trier
               </Button>
-              <Badge variant="outline">{rows.length} éléments</Badge>
+              <Badge variant="outline">{vehicleRows.length} éléments</Badge>
             </div>
           </div>
 
@@ -367,54 +562,71 @@ export function FilterComparisonBlock() {
                 </tr>
               </thead>
               <tbody>
-                {rows.length === 0 ? (
+                {vehicleRows.length === 0 ? (
                   <tr>
                     <td className="p-6 text-center text-sm text-muted-foreground" colSpan={8}>
                       {tableLoading ? "Calcul en cours…" : "Aucun élément à afficher (cliquez sur Comparer)."}
                     </td>
                   </tr>
                 ) : (
-                  rows.map((r, idx) => (
-                    <tr key={r.id} className={`border-b hover:bg-muted/50 ${idx % 2 === 0 ? "bg-muted/20" : ""}`}>
-                      <td className="p-3">
-                        <div className="flex items-center">
-                          <Truck className="h-4 w-4 mr-2 text-muted-foreground" />
-                          <div>
-                            <div className="font-medium">{r.name}</div>
-                            <div className="text-sm text-muted-foreground">{r.plate ?? "—"}</div>
+                  <>
+                    {vehicleRows.map((r, idx) => (
+                      <tr key={r.id} className={`border-b hover:bg-muted/50 ${idx % 2 === 0 ? "bg-muted/20" : ""}`}>
+                        <td className="p-3">
+                          <div className="flex items-center">
+                            <Truck className="h-4 w-4 mr-2 text-muted-foreground" />
+                            <div>
+                              <div className="font-medium">{r.name}</div>
+                              <div className="text-sm text-muted-foreground">{r.plate ?? "—"}</div>
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        <div className="flex items-center">
-                          <MapPin className="h-4 w-4 mr-2 text-muted-foreground" />
-                          {r.groupName ?? "—"}
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        <div className="flex items-center">
-                          <span className="font-medium">{r.consumption.toFixed(1)}</span>
-                          {r.consumption > 50
-                            ? <TrendingUp className="h-4 w-4 ml-2 text-danger" />
-                            : <TrendingDown className="h-4 w-4 ml-2 text-success" />
-                          }
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        <Badge className={r.alerts > 2 ? "bg-danger text-danger-foreground" : "bg-success text-success-foreground"}>
-                          {r.alerts}
-                        </Badge>
-                      </td>
-                      <td className="p-3">
-                        {r.maintenanceStatus === "OK"
-                          ? <Badge className="bg-success text-success-foreground">OK</Badge>
-                          : <Badge className="bg-danger text-danger-foreground">En retard</Badge>}
-                      </td>
-                      <td className="p-3"><span className="font-medium">{r.temperature}°C</span></td>
-                      <td className="p-3 font-medium">{Math.round(r.distanceKm).toLocaleString()}</td>
-                      <td className="p-3">{effBadge(r.efficiencyPct)}</td>
-                    </tr>
-                  ))
+                        </td>
+                        <td className="p-3">
+                          <div className="flex items-center">
+                            <MapPin className="h-4 w-4 mr-2 text-muted-foreground" />
+                            {r.groupName ?? "—"}
+                          </div>
+                        </td>
+                        <td className="p-3">
+                          <div className="flex items-center">
+                            <span className="font-medium">{r.consumption.toFixed(1)}</span>
+                            {r.consumption > 50
+                              ? <TrendingUp className="h-4 w-4 ml-2 text-danger" />
+                              : <TrendingDown className="h-4 w-4 ml-2 text-success" />
+                            }
+                          </div>
+                        </td>
+                        <td className="p-3">
+                          <Badge className={r.alerts > 2 ? "bg-danger text-danger-foreground" : "bg-success text-success-foreground"}>
+                            {r.alerts}
+                          </Badge>
+                        </td>
+                        <td className="p-3">
+                          {r.maintenanceStatus === "OK"
+                            ? <Badge className="bg-success text-success-foreground">OK</Badge>
+                            : <Badge className="bg-danger text-danger-foreground">En retard</Badge>}
+                        </td>
+                        <td className="p-3"><span className="font-medium">{r.temperature}°C</span></td>
+                        <td className="p-3 font-medium">{Math.round(r.distanceKm).toLocaleString()}</td>
+                        <td className="p-3">{effBadge(r.efficiencyPct)}</td>
+                      </tr>
+                    ))}
+                    {/* ✅ RECTIFICATION 3: Ligne de totaux pour les véhicules */}
+                    {vehicleTotals && (
+                      <tr className="border-t-2 bg-muted/40 font-semibold">
+                        <td className="p-3">TOTAL ({vehicleTotals.count} véhicules)</td>
+                        <td className="p-3">—</td>
+                        <td className="p-3">{vehicleTotals.avgConsumption.toFixed(1)}</td>
+                        <td className="p-3">
+                          <Badge className="bg-info text-info-foreground">{vehicleTotals.totalAlerts}</Badge>
+                        </td>
+                        <td className="p-3">—</td>
+                        <td className="p-3">—</td>
+                        <td className="p-3">{Math.round(vehicleTotals.totalDistance).toLocaleString()}</td>
+                        <td className="p-3">{effBadge(vehicleTotals.avgEfficiency)}</td>
+                      </tr>
+                    )}
+                  </>
                 )}
               </tbody>
             </table>

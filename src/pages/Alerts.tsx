@@ -1,4 +1,4 @@
-// src/pages/Alerts.tsx
+// src/pages/Alerts.tsx - UPDATED with DateRangePicker
 import { useEffect, useMemo, useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -8,8 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
-import { useNavigate } from "react-router-dom";
-
+import { DateRangePicker } from "@/components/DateRangePicker"
+import { useNavigate } from "react-router-dom"
 import { Label } from "@/components/ui/label"
 import {
   AlertTriangle,
@@ -24,7 +24,6 @@ import {
   Edit,
   CheckCircle,
   MessageCircle,
-  RefreshCw,
 } from "lucide-react"
 import { api } from "@/lib/api"
 
@@ -35,27 +34,6 @@ function slug(v: string) {
     .replace(/[^\w]+/g, "-")
     .replace(/(^-|-$)/g, "")
     .toLowerCase()
-}
-
-/* ---------- Helpers période ---------- */
-function toIsoLocalValue(d: Date) {
-  const pad = (n: number) => String(n).padStart(2, "0")
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-function defaultRange() {
-  const to = new Date()
-  const from = new Date(to.getTime() - 24 * 60 * 60 * 1000) // 24h
-  return { from, to }
-}
-function readRangeFromStorage() {
-  const f = localStorage.getItem("alertsFrom")
-  const t = localStorage.getItem("alertsTo")
-  if (f && t) return { from: new Date(f), to: new Date(t) }
-  return defaultRange()
-}
-function saveRangeToStorage(from: Date, to: Date) {
-  localStorage.setItem("alertsFrom", from.toISOString())
-  localStorage.setItem("alertsTo", to.toISOString())
 }
 
 /* ---------- Types UI ---------- */
@@ -86,9 +64,10 @@ interface Alert {
   status: AlertStatus
   comments: Comment[]
   actionPlan: ActionStep[]
+  createdAt?: string
 }
 
-/* --------- Plans d’actions par défaut --------- */
+/* --------- Plans d'actions par défaut --------- */
 const defaultPlans: Record<AlertType, string[]> = {
   critical: ["Contacter le conducteur", "Vérifier la limite de vitesse/zone", "Analyser la trajectoire (±15 min)", "Rédiger un avertissement"],
   warning: ["Diagnostiquer la cause", "Notifier le conducteur/chef d'équipe", "Planifier un suivi"],
@@ -96,10 +75,7 @@ const defaultPlans: Record<AlertType, string[]> = {
 }
 const MAX_ACTIONS = 10
 
-/* =========================================================
-   PERSISTENCE PARTAGÉE PAR COMPAGNIE (frontend)
-========================================================= */
-// lit les credentials stockés par la page de login
+/* ========================================================= */
 function loadSessionCreds(): { username: string; password: string } | null {
   try {
     const raw = sessionStorage.getItem("fleet_auth")
@@ -110,7 +86,6 @@ function loadSessionCreds(): { username: string; password: string } | null {
   return null
 }
 
-// slug compagnie
 function companyFromUsername(u?: string | null): string {
   const base = (u || "").split("@")[0] || ""
   return (
@@ -122,55 +97,19 @@ function companyFromUsername(u?: string | null): string {
   )
 }
 
-// charge l’état persistant d’un lot d’alertes (via backend/DB)
-async function loadPersistedStates(company: string, alertIds: string[]) {
-  const data = await api.alertsGetStates(company, alertIds)
-  return (data?.states || {}) as Record<string, Partial<Alert>>
-}
-
-// applique des patchs (merge) persistants (via backend/DB)
-async function patchPersistedStates(company: string, patches: Array<{ id: string; patch: Partial<Alert> }>) {
-  return api.alertsPatchStates(company, patches)
-}
-
 /* ===================== PAGE ===================== */
 export default function Alerts() {
-  /* --- Période --- */
-    const navigate = useNavigate();
+  const navigate = useNavigate()
 
-  const initial = readRangeFromStorage()
-  const [fromLocal, setFromLocal] = useState<string>(toIsoLocalValue(initial.from))
-  const [toLocal, setToLocal] = useState<string>(toIsoLocalValue(initial.to))
-  const [range, setRange] = useState<{ from: Date; to: Date }>(initial)
-  const [rangeError, setRangeError] = useState<string | null>(null)
-
-  const applyRange = () => {
-    setRangeError(null)
-    const f = new Date(fromLocal)
-    const t = new Date(toLocal)
-    if (Number.isNaN(+f) || Number.isNaN(+t)) return setRangeError("Dates invalides")
-    if (+f >= +t) return setRangeError("La date de début doit être avant la date de fin")
-    saveRangeToStorage(f, t)
-    setRange({ from: f, to: t })
-    fetchFromServer(f, t)
-  }
-  const setLast24h = () => {
-    const { from, to } = defaultRange()
-    setFromLocal(toIsoLocalValue(from))
-    setToLocal(toIsoLocalValue(to))
-    saveRangeToStorage(from, to)
-    setRange({ from, to })
-    fetchFromServer(from, to)
-  }
-  const setLast7d = () => {
+  /* --- Période gérée par DateRangePicker --- */
+  const [range, setRange] = useState<{ from: Date; to: Date }>(() => {
+    const f = localStorage.getItem("alertsFrom")
+    const t = localStorage.getItem("alertsTo")
+    if (f && t) return { from: new Date(f), to: new Date(t) }
     const to = new Date()
-       const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000)
-    setFromLocal(toIsoLocalValue(from))
-    setToLocal(toIsoLocalValue(to))
-    saveRangeToStorage(from, to)
-    setRange({ from, to })
-    fetchFromServer(from, to)
-  }
+    const from = new Date(to.getTime() - 24 * 60 * 60 * 1000)
+    return { from, to }
+  })
 
   /* --- État & filtres --- */
   const [alerts, setAlerts] = useState<Alert[]>([])
@@ -212,8 +151,7 @@ export default function Alerts() {
   }, [])
 
   useEffect(() => {
-    if (isAlreadyLogged) fetchFromServer()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (isAlreadyLogged) fetchFromServer(range.from, range.to)
   }, [isAlreadyLogged])
 
   /* --- Mapping label → type --- */
@@ -224,73 +162,184 @@ export default function Alerts() {
     return "success"
   }
 
-  /* --- Chargement serveur + merge état persistant --- */
-  async function fetchFromServer(f?: Date, t?: Date) {
+  /* --- Helper pour trouver le conducteur --- */
+  function findDriverForEvent(eventTimestamp: number, trips: any[]): string {
+    if (!eventTimestamp || !trips.length) return "—"
+    
+    const matchingTrip = trips.find((trip: any) => {
+      const tripStart = trip?.startTime ? new Date(trip.startTime).getTime() : 0
+      const tripEnd = trip?.endTime ? new Date(trip.endTime).getTime() : 0
+      
+      return tripStart <= eventTimestamp && eventTimestamp <= tripEnd
+    })
+    
+    if (matchingTrip) {
+      return matchingTrip?.driverName || 
+             matchingTrip?.driverUniqueId || 
+             matchingTrip?.driver?.name ||
+             matchingTrip?.driver?.uniqueId ||
+             "—"
+    }
+    
+    return "—"
+  }
+
+  /* --- Chargement serveur optimisé --- */
+  async function fetchFromServer(from: Date, to: Date) {
     setLoading(true)
     setLoadError(null)
+    
     try {
-      const { from: F, to: T } = { from: f ?? range.from, to: t ?? range.to }
-      const fromISO = F.toISOString()
-      const toISO = T.toISOString()
+      const fromISO = from.toISOString()
+      const toISO = to.toISOString()
 
-      // 1) devices
+      console.log("📦 Chargement des alertes optimisé...")
+
       const devs: any[] = await api.devices()
-      const ids: number[] = Array.isArray(devs) ? devs.map((d: any) => Number(d.id)).filter(Number.isFinite) : []
+      const ids: number[] = Array.isArray(devs) 
+        ? devs.map((d: any) => Number(d.id)).filter(Number.isFinite) 
+        : []
+      
       if (ids.length === 0) {
         setAlerts([])
         setLoading(false)
         return
       }
+      
       const devById = new Map<number, any>(devs.map((d: any) => [Number(d.id), d]))
+      console.log(`✅ Loaded ${ids.length} devices`)
 
-      // 2) agrégat events
-      const data: any = await api.vehicleAlerts(ids, fromISO, toISO)
-      const rows: any[] = Array.isArray(data?.rows) ? data.rows : []
+      const batchData = await api.batchData(ids, fromISO, toISO)
+      
+      const allTrips = Array.isArray(batchData?.trips) ? batchData.trips : []
+      const allEvents = Array.isArray(batchData?.events) ? batchData.events : []
+      
+      console.log(`📊 Reçu ${allTrips.length} trips et ${allEvents.length} events`)
+      
+      const tripsByDevice = new Map<number, any[]>()
+      const eventsByDevice = new Map<number, any[]>()
+      
+      for (const trip of allTrips) {
+        const id = Number(trip.deviceId)
+        if (!Number.isFinite(id)) continue
+        
+        if (!tripsByDevice.has(id)) tripsByDevice.set(id, [])
+        tripsByDevice.get(id)!.push(trip)
+      }
+      
+      for (const event of allEvents) {
+        const id = Number(event.deviceId)
+        if (!Number.isFinite(id)) continue
+        
+        if (!eventsByDevice.has(id)) eventsByDevice.set(id, [])
+        eventsByDevice.get(id)!.push(event)
+      }
+      
+      console.log(`✅ Groupé: ${tripsByDevice.size} devices avec trips, ${eventsByDevice.size} avec events`)
 
-      // 3) synthèse cartes
-      const now = new Date()
-      const dateStr = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
-      const timeStr = now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
+      const vehicleAlertsData = await api.vehicleAlerts(ids, fromISO, toISO)
+      const rows: any[] = Array.isArray(vehicleAlertsData?.rows) ? vehicleAlertsData.rows : []
 
       const synthetic: Alert[] = []
+      
       for (const r of rows) {
-        const device = devById.get(Number(r.deviceId))
-        const vehicleLabel = device?.name || device?.uniqueId || `Device #${r.deviceId}`
+        const deviceId = Number(r.deviceId)
+        const device = devById.get(deviceId)
+        const vehicleLabel = device?.name || device?.uniqueId || `Device #${deviceId}`
         const labels: string[] = Array.isArray(r?.alerts) ? r.alerts : []
+        const events = eventsByDevice.get(deviceId) || []
+        const trips = tripsByDevice.get(deviceId) || []
+        
+        console.log(`🚗 Device ${deviceId} (${vehicleLabel}): ${trips.length} trips, ${events.length} events, ${labels.length} alert types`)
+        
         labels.forEach((label: string) => {
           const type = labelToType(label)
-          const stableId = `${r.deviceId}::${slug(label)}`
+          const stableId = `${deviceId}::${slug(label)}`
+          
+          const normalizedLabel = label.toLowerCase()
+          const matchingEvent = events.find((ev: any) => {
+            const evType = (ev?.type || '').toLowerCase()
+            const evAlarm = (ev?.attributes?.alarm || '').toLowerCase()
+            
+            if (evType === normalizedLabel) return true
+            if (evAlarm && (evAlarm === normalizedLabel || evAlarm.includes(normalizedLabel))) return true
+            if (evType && normalizedLabel.includes(evType)) return true
+            if (evType && evType.includes(normalizedLabel)) return true
+            
+            return false
+          })
+          
+          const eventTime = matchingEvent?.serverTime || matchingEvent?.fixTime || matchingEvent?.deviceTime
+          const eventDate = eventTime ? new Date(eventTime) : null
+          
+          const eventDateStr = eventDate 
+            ? eventDate.toLocaleDateString("fr-FR", { 
+                weekday: "long", 
+                day: "numeric", 
+                month: "long", 
+                year: "numeric" 
+              })
+            : "Date inconnue"
+            
+          const eventTimeStr = eventDate 
+            ? eventDate.toLocaleTimeString("fr-FR", { 
+                hour: "2-digit", 
+                minute: "2-digit", 
+                second: "2-digit" 
+              })
+            : "—"
+          
+          const eventLocation = matchingEvent?.address || 
+                                (Array.isArray(r?.geofences) && r.geofences[0]) || 
+                                "Localisation inconnue"
+          
+          let driverName = "—"
+          if (eventDate && trips.length > 0) {
+            const eventTimestamp = eventDate.getTime()
+            driverName = findDriverForEvent(eventTimestamp, trips)
+            
+            console.log(`   👤 Alert "${label}" à ${eventDate.toISOString()} → Driver: ${driverName}`)
+          }
+          
           synthetic.push({
             id: stableId,
             type,
             title: label,
-            description: `Événement "${label}" détecté sur la période.`,
-            time: timeStr,
-            date: dateStr,
-            location: (Array.isArray(r?.geofences) && r.geofences[0]) || "—",
+            description: eventDate 
+              ? `Événement "${label}" détecté le ${eventDateStr} à ${eventTimeStr} (${eventLocation}).`
+              : `Événement "${label}" détecté sur la période.`,
+            time: eventTimeStr,
+            date: eventDateStr,
+            location: eventLocation,
             vehicle: vehicleLabel,
-            driver: "—",
+            driver: driverName,
             status: "new",
             comments: [],
             actionPlan: [],
+            createdAt: eventDate?.toISOString() || new Date().toISOString(),
           })
         })
       }
 
-      // 4) merge avec état persistant (BD)
       const idsToMerge = synthetic.map((a) => a.id)
       if (idsToMerge.length) {
         try {
-          const persisted = await loadPersistedStates(company, idsToMerge)
+          const persistedData = await api.alertsGetStates(company, idsToMerge)
+          
           for (let i = 0; i < synthetic.length; i++) {
             const a = synthetic[i]
-            const p = persisted[a.id]
+            const p = persistedData.states[a.id]
+            
             if (p) {
               synthetic[i] = {
                 ...a,
                 status: (p.status as any) || a.status,
-                actionPlan: Array.isArray(p.actionPlan) && p.actionPlan.length ? (p.actionPlan as ActionStep[]) : a.actionPlan,
-                comments: Array.isArray(p.comments) ? (p.comments as Comment[]) : a.comments,
+                actionPlan: Array.isArray(p.actionPlan) && p.actionPlan.length 
+                  ? (p.actionPlan as ActionStep[]) 
+                  : a.actionPlan,
+                comments: Array.isArray(p.comments) 
+                  ? (p.comments as Comment[]) 
+                  : a.comments,
                 type: (p.type as AlertType) || a.type,
               }
             }
@@ -299,9 +348,11 @@ export default function Alerts() {
           console.warn("load persisted states failed:", (e as any)?.message)
         }
       }
-
+      
+      console.log(`✅ Créé ${synthetic.length} alertes depuis ${rows.length} device reports`)
       setAlerts(synthetic)
     } catch (e: any) {
+      console.error("❌ Fetch failed:", e)
       setLoadError(e?.message || "Erreur de chargement des alertes")
       setAlerts([])
     } finally {
@@ -384,7 +435,7 @@ export default function Alerts() {
       const a = alerts.find((x) => x.id === id)
       if (!a) return
       const patched = injectDefaultPlan(a)
-      await patchPersistedStates(company, [
+      await api.alertsPatchStates(company, [
         {
           id,
           patch: {
@@ -402,8 +453,6 @@ export default function Alerts() {
           },
         },
       ])
-      // (optionnel) on pourrait aussi appeler l'endpoint dédié in-progress,
-      // mais ce n'est pas nécessaire si ton patch crée déjà la ligne.
     } catch (e) {
       console.warn("persist takeInCharge failed:", (e as any)?.message)
     }
@@ -420,7 +469,11 @@ export default function Alerts() {
       })
     )
     try {
-      if (next) await patchPersistedStates(company, [{ id: alertId, patch: { actionPlan: next.actionPlan } }])
+      if (next) {
+        await api.alertsPatchStates(company, [
+          { id: alertId, patch: { actionPlan: next.actionPlan } }
+        ])
+      }
     } catch (e) {
       console.warn("persist toggleStep failed:", (e as any)?.message)
     }
@@ -448,31 +501,54 @@ export default function Alerts() {
       })
     )
     try {
-      if (next) await patchPersistedStates(company, [{ id: alertId, patch: { actionPlan: next.actionPlan } }])
+      if (next) await api.alertsPatchStates(company, [{ id: alertId, patch: { actionPlan: next.actionPlan } }])
     } catch (e) {
       console.warn("persist addStep failed:", (e as any)?.message)
     }
   }
 
   const markResolved = async (id: string) => {
-    // 1) UI immédiate
-    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, status: "resolved", type: "success" } : a)))
+    const alert = alerts.find((a) => a.id === id)
+    if (!alert) return
+
+    const creds = loadSessionCreds()
+
+    setAlerts((prev) => 
+      prev.map((a) => 
+        a.id === id ? { ...a, status: "resolved", type: "success" } : a
+      )
+    )
+    
     if (detailAlert?.id === id) setDetailAlert(null)
     if (editAlert?.id === id) setEditAlert(null)
 
-    // 2) Persistance existante (patch) — on la garde pour commentaires/plan
     try {
-      await patchPersistedStates(company, [{ id, patch: { status: "resolved", type: "success" } }])
+      await api.alertsPatchStates(company, [
+        { id, patch: { status: "resolved", type: "success" } }
+      ])
     } catch (e) {
-      console.warn("persist markResolved (patch) failed:", (e as any)?.message)
+      console.warn("⚠️ Patch state failed:", (e as any)?.message)
     }
 
-    // 3) **AJOUT CRUCIAL** : écrire aussi le statut 'done' pour la page "Alertes traitées"
     try {
-      const creds = loadSessionCreds()
-      await api.alertsDonePost(company, creds?.username || null, [id], "success")
+      await api.alertsDonePost(company, creds?.username || null, [
+        {
+          id: alert.id,
+          title: alert.title,
+          description: alert.description,
+          type: alert.type,
+          vehicle: alert.vehicle,
+          driver: alert.driver,
+          location: alert.location,
+          date: alert.date,
+          time: alert.time,
+          comments: alert.comments,
+          actionPlan: alert.actionPlan,
+          createdAt: alert.createdAt || new Date().toISOString(),
+        }
+      ])
     } catch (e) {
-      console.warn("persist markResolved (done) failed:", (e as any)?.message)
+      console.error("❌ Save to resolved_alerts failed:", e)
     }
   }
 
@@ -484,6 +560,7 @@ export default function Alerts() {
     setCustomActionLabel("")
     setActionError(null)
   }
+  
   const validateEdit = async () => {
     if (!editAlert) return
     let next: Alert | null = null
@@ -508,7 +585,7 @@ export default function Alerts() {
     setActionError(null)
     setEditAlert(null)
     try {
-      if (next) await patchPersistedStates(company, [{ id: next.id, patch: { comments: next.comments, actionPlan: next.actionPlan } }])
+      if (next) await api.alertsPatchStates(company, [{ id: next.id, patch: { comments: next.comments, actionPlan: next.actionPlan } }])
     } catch (e) {
       console.warn("persist validateEdit failed:", (e as any)?.message)
     }
@@ -520,42 +597,49 @@ export default function Alerts() {
       <div className="p-6 space-y-6">
         {/* Header */}
         <div className="bg-white rounded-lg shadow-sm p-6">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between mb-4">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Gestion des alertes</h1>
               <p className="text-gray-600 mt-1">Surveillez et gérez les alertes de la flotte en temps réel</p>
             </div>
-            <div className="flex items-center gap-3">{/* actions header */}
-                <Button
-    variant="default"
-    size="sm"
-    className="bg-green-600 hover:bg-green-700 text-white flex items-center gap-2"
-    onClick={() => navigate("/resolved-alerts")}
-  >
-    <CheckCircle className="h-4 w-4" />
-    Alertes traitées
-  </Button>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="default"
+                size="sm"
+                className="bg-green-600 hover:bg-green-700 text-white flex items-center gap-2"
+                onClick={() => navigate("/resolved-alerts")}
+              >
+                <CheckCircle className="h-4 w-4" />
+                Alertes traitées
+              </Button>
             </div>
           </div>
 
-          {/* Période */}
-          <div className="mt-4 flex flex-col md:flex-row md:items-end gap-2">
-            <div>
-              <label className="block text-xs mb-1">De</label>
-              <Input type="datetime-local" value={fromLocal} onChange={(e) => setFromLocal(e.target.value)} />
+          {/* Sélecteur de période avec DateRangePicker */}
+          <DateRangePicker
+            onRangeChange={(from, to) => {
+              setRange({ from, to })
+              fetchFromServer(from, to)
+            }}
+            storageKey="alertsRange"
+            showQuickFilters={true}
+          />
+
+          {loadError && (
+            <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+              ❌ {loadError}
             </div>
-            <div>
-              <label className="block text-xs mb-1">À</label>
-              <Input type="datetime-local" value={toLocal} onChange={(e) => setToLocal(e.target.value)} />
-            </div>
-            <Button onClick={applyRange} className="flex items-center gap-2">
-              <RefreshCw className="h-4 w-4" /> Appliquer
-            </Button>
-            <Button variant="outline" onClick={setLast24h}>Dernières 24h</Button>
-            <Button variant="outline" onClick={setLast7d}>7 jours</Button>
-            {rangeError && <span className="text-xs text-red-600 ml-1">{rangeError}</span>}
-            {loadError && <span className="text-xs text-red-600 ml-1">{loadError}</span>}
-            {loading && <span className="text-xs text-gray-500 ml-1">Chargement…</span>}
+          )}
+
+          {/* Search */}
+          <div className="relative mt-4">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Input
+              placeholder="Rechercher par titre, conducteur, véhicule, localisation..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10"
+            />
           </div>
         </div>
 
@@ -657,7 +741,7 @@ export default function Alerts() {
               </div>
               <div className="flex items-center gap-2 text-sm text-gray-500">
                 <Clock className="h-4 w-4" />
-                Dernière mise à jour: selon période
+                {loading ? "Chargement..." : "Prêt"}
               </div>
             </div>
           </div>
@@ -665,20 +749,9 @@ export default function Alerts() {
           <div className="p-6">
             <div className="flex items-center gap-2 mb-4">
               <Filter className="h-5 w-5" />
-              <h3 className="text-lg font-semibold">Filtres et recherche</h3>
+              <h3 className="text-lg font-semibold">Filtres</h3>
             </div>
             <div className="flex gap-4">
-              <div className="flex-1">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                  <Input
-                    placeholder="Rechercher des alertes..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10"
-                  />
-                </div>
-              </div>
               <Select value={filterType} onValueChange={(v) => setFilterType(v as any)}>
                 <SelectTrigger className="w-[200px]">
                   <SelectValue placeholder="Toutes les priorités" />
@@ -746,7 +819,11 @@ export default function Alerts() {
                         </div>
                         <div className="flex items-center gap-2">
                           <MapPin className="h-3 w-3" />
-                          <span>{alert.location}</span>
+                          <span className="truncate">{alert.location}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Calendar className="h-3 w-3" />
+                          <span className="text-xs">{alert.date}</span>
                         </div>
                       </div>
 
@@ -949,8 +1026,7 @@ export default function Alerts() {
       <Dialog open={!!editAlert} onOpenChange={() => setEditAlert(null)}>
         <DialogContent className="max-w-lg bg-white border shadow-xl z-50">
           <DialogHeader>
-            <DialogTitle>Dépassement de vitesse</DialogTitle>
-            <p className="text-sm text-gray-600">Actions du gestionnaire</p>
+            <DialogTitle>Modifier l'action</DialogTitle>
           </DialogHeader>
 
           {editAlert && (
@@ -1004,7 +1080,7 @@ export default function Alerts() {
                 {newActionChoice === "__autre__" && (
                   <div className="mt-2 flex gap-2">
                     <Input
-                      placeholder="Saisir l’intitulé de l’action…"
+                      placeholder="Saisir l'intitulé de l'action…"
                       value={customActionLabel}
                       onChange={(e) => setCustomActionLabel(e.target.value)}
                       disabled={isMaxReached(editAlert)}

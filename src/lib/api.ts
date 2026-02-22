@@ -1,4 +1,4 @@
-// src/lib/api.ts
+// src/lib/api.ts - FIXED VERSION
 type Creds = { username: string; password: string };
 
 /* ===================== Session creds ===================== */
@@ -81,6 +81,15 @@ export const api = {
   devices: () => postJSON("/api/devices"),
   groups: () => postJSON("/api/groups"),
 
+  /* =============== BATCH DATA (NOUVEAU) =============== */
+  batchData: (deviceIds: number[], from: string, to: string) =>
+    postJSON<{ 
+      ok: true; 
+      trips: any[]; 
+      events: any[]; 
+      count: { trips: number; events: number } 
+    }>("/api/batch-data", { deviceIds, from, to }),
+
   /* =============== REPORTS =============== */
   averageSpeed: (deviceIds: number[], from: string, to: string) =>
     postJSON("/api/reports/average-speed", { deviceIds, from, to }),
@@ -121,8 +130,28 @@ export const api = {
       { company, username, ids, type }
     ),
 
-  alertsDonePost: (company: string, username: string | null, ids: string[], type?: string) =>
-    postJSON<{ ok: true; company: string; count: number; status: "done" }>(
+  /** 
+   * ✅ MODIFIÉ: Accepte maintenant des objets complets avec toutes les données d'alerte
+   */
+  alertsDonePost: (
+    company: string, 
+    username: string | null, 
+    ids: Array<{
+      id: string;
+      title?: string;
+      description?: string;
+      type?: string;
+      vehicle?: string;
+      driver?: string;
+      location?: string;
+      date?: string;
+      time?: string;
+      comments?: any[];
+      actionPlan?: any[];
+    }>, 
+    type?: string
+  ) =>
+    postJSON<{ ok: true; company: string; count: number; status: "resolved" }>(
       "/api/db/alerts/done",
       { company, username, ids, type }
     ),
@@ -151,5 +180,5 @@ export const api = {
   alertMarkInProgress: (company: string, username: string | null, id: string, type?: string) =>
     api.alertsInProgressPost(company, username, [id], type),
   alertMarkDone: (company: string, username: string | null, id: string, type?: string) =>
-    api.alertsDonePost(company, username, [id], type),
+    api.alertsDonePost(company, username, [{ id }], type),
 };

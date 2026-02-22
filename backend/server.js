@@ -1,4 +1,4 @@
-// server.js  (ESM)
+// server.js  (ESM) - FIXED VERSION
 
 import dotenv from "dotenv";
 dotenv.config(); // IMPORTANT: avant toute lecture de process.env
@@ -13,13 +13,13 @@ import pkg from "pg";
 const { Pool } = pkg;
 
 /* =========================
-   PostgreSQL Pool
+   PostgreSQL Pool - FIXED
 ========================= */
 export const pg = new Pool({
   host: process.env.PGHOST || "localhost",
   port: Number(process.env.PGPORT || 5432),
   user: process.env.PGUSER || "postgres",
-  password: String(process.env.PGPASSWORD ?? ""),   // <-- force string
+  password: process.env.PGPASSWORD || "1234",   // ✅ FIX: Direct fallback sans String()
   database: process.env.PGDATABASE || "postgres",
   max: 10,
 });
@@ -39,7 +39,7 @@ app.use(express.json());
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = Number(process.env.PORT || 8080);
+const PORT = Number(process.env.PORT || 8088);
 const BASE = (process.env.UPSTREAM_BASE || "https://api.pinme.io/api").replace(/\/+$/, "");
 const TEST_PATH = process.env.TEST_PATH || "/devices";
 
@@ -183,6 +183,45 @@ async function getMaint(auth, deviceId) {
     return asArr(r.data);
   });
 }
+
+app.post("/api/batch-data", async (req, res) => {
+  const { username, password, deviceIds, from, to } = req.body || {};
+  const auth = makeBasicHeader(username, password);
+  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
+  if (!Array.isArray(deviceIds) || deviceIds.length === 0) {
+    return res.status(400).json({ ok: false, error: "no_devices" });
+  }
+  if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
+  try {
+    console.log(`[BATCH] Fetching trips+events for ${deviceIds.length} devices`);
+    const results = await runPool(deviceIds, CONCURRENCY, async (id) => {
+      const [trips, events] = await Promise.all([
+        getTrips(auth, id, from, to),
+        getEvents(auth, id, from, to),
+      ]);
+      return { deviceId: id, trips, events };
+    });
+    const allTrips = [];
+    const allEvents = [];
+    
+    for (const { trips, events } of results) {
+      allTrips.push(...trips);
+      allEvents.push(...events);
+    }
+
+    console.log(`[BATCH] Returning ${allTrips.length} trips and ${allEvents.length} events`);
+    
+    res.json({
+      ok: true,
+      trips: allTrips,
+      events: allEvents,
+      count: { trips: allTrips.length, events: allEvents.length }
+    });
+  } catch (e) {
+    console.error("[BATCH] Error:", e);
+    res.status(500).json({ ok: false, error: "batch_failed", detail: e.message });
+  }
+});
 
 /* =========================
    AUTH + basic resources
@@ -343,6 +382,36 @@ app.post("/api/reports/active-devices", async (req, res) => {
 /* =========================
    Vehicle alerts (PinMe)
 ========================= */
+app.post("/api/reports/events", async (req, res) => {
+  const { username, password, deviceId, from, to } = req.body || {};
+  const auth = makeBasicHeader(username, password);
+  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
+  if (!deviceId) return res.status(400).json({ ok: false, error: "no_device" });
+  if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
+
+  try {
+    const events = await getEvents(auth, deviceId, from, to);
+    res.json(events);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: "events_failed", detail: e.message });
+  }
+});
+
+app.post("/api/reports/trips", async (req, res) => {
+  const { username, password, deviceId, from, to } = req.body || {};
+  const auth = makeBasicHeader(username, password);
+  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
+  if (!deviceId) return res.status(400).json({ ok: false, error: "no_device" });
+  if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
+
+  try {
+    const trips = await getTrips(auth, deviceId, from, to);
+    res.json(trips);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: "trips_failed", detail: e.message });
+  }
+});
+
 app.post("/api/reports/vehicle-alerts", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
   const auth = makeBasicHeader(username, password);
@@ -752,54 +821,109 @@ app.post("/api/db/alerts/in-progress", async (req, res) => {
 
 /**
  * POST /api/db/alerts/done
- * Body: { company?, username?, ids: string[], type? }
- *
- * ⚠️ IMPORTANT: on enregistre **resolved** (et plus done) pour coller à la DB existante.
  */
 app.post("/api/db/alerts/done", async (req, res) => {
   const company = getCompanyFromBody(req.body);
   const username = req.body?.username || null;
-  const ids = normIds(req.body?.ids);
+  const alertsData = Array.isArray(req.body?.ids) ? req.body.ids : [];
   const type = req.body?.type || null;
 
   if (!company) return res.status(400).json({ ok: false, error: "missing_company" });
-  if (!ids.length) return res.status(400).json({ ok: false, error: "no_ids" });
+  if (!alertsData.length) return res.status(400).json({ ok: false, error: "no_ids" });
 
   const client = await pg.connect();
   try {
     await client.query("BEGIN");
+    const now = new Date();
+    const nowISO = now.toISOString();
 
-    for (const alertId of ids) {
+    for (const alertData of alertsData) {
+      const alertId = typeof alertData === 'string' ? alertData : alertData.id;
+      if (!alertId) continue;
+
+      // 1) Mettre à jour alert_states
       await client.query(
         `
         INSERT INTO alerts.alert_states
-          (company, alert_id, status, type, taken_by, taken_at, updated_at)
-        VALUES ($1,$2,'resolved', COALESCE($3,'success'), $4, COALESCE($5, alerts.alert_states.taken_at), now())
+          (company, alert_id, status, type, taken_by, updated_at)
+        VALUES ($1, $2, 'resolved', COALESCE($3, 'success'), $4, now())
         ON CONFLICT (company, alert_id)
         DO UPDATE SET
           status     = 'resolved',
           type       = COALESCE($3, alerts.alert_states.type),
-          taken_by   = COALESCE(alerts.alert_states.taken_by, $4),
           updated_at = now()
         `,
-        [company, alertId, type, username, null]
+        [company, alertId, type, username]
       );
+
+      // 2) ✅ COMPLET: Insérer dans resolved_alerts
+      if (typeof alertData === 'object' && alertData.title) {
+        // Parser la date de l'événement pour TIMESTAMP
+        let alertOccurredAt = null;
+        if (alertData.date && alertData.time) {
+          try {
+            const parsed = new Date(`${alertData.date} ${alertData.time}`);
+            if (!isNaN(parsed.getTime())) {
+              alertOccurredAt = parsed.toISOString();
+            }
+          } catch (e) {
+            console.warn(`⚠️ Could not parse date: ${alertData.date} ${alertData.time}`);
+          }
+        }
+
+        await client.query(
+          `
+          INSERT INTO alerts.resolved_alerts
+            (company, alert_id, title, description, type, vehicle, driver, location, 
+             event_date, event_time, alert_occurred_at, 
+             resolved_by, resolved_by_user, resolved_at, original_created_at,
+             comments, action_plan)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+          ON CONFLICT (company, alert_id) 
+          DO UPDATE SET
+            resolved_at = EXCLUDED.resolved_at,
+            resolved_by = EXCLUDED.resolved_by,
+            resolved_by_user = EXCLUDED.resolved_by_user
+          `,
+          [
+            company,                                    // $1
+            alertId,                                    // $2
+            alertData.title || '',                      // $3
+            alertData.description || '',                // $4
+            alertData.type || 'success',                // $5
+            alertData.vehicle || '—',                   // $6
+            alertData.driver || '—',                    // $7
+            alertData.location || 'Localisation inconnue', // $8
+            alertData.date || null,                     // $9
+            alertData.time || null,                     // $10
+            alertOccurredAt,                            // $11 ✅ TIMESTAMP
+            username || 'system',                       // $12
+            username || 'system',                       // $13 ✅ USER COMPLET
+            now,                                        // $14 ✅ DATE RÉSOLUTION
+            alertData.createdAt || nowISO,              // $15 ✅ DATE CRÉATION
+            JSON.stringify(alertData.comments || []),   // $16
+            JSON.stringify(alertData.actionPlan || [])  // $17
+          ]
+        );
+        
+        console.log(`✅ Saved resolved alert ${alertId}:`);
+        console.log(`   📍 Location: ${alertData.location}`);
+        console.log(`   👤 Driver: ${alertData.driver}`);
+        console.log(`   📅 Occurred at: ${alertOccurredAt || 'unknown'}`);
+        console.log(`   ✅ Resolved by: ${username} at ${now.toISOString()}`);
+      }
     }
 
     await client.query("COMMIT");
-    res.json({ ok: true, company, count: ids.length, status: "resolved" });
+    res.json({ ok: true, company, count: alertsData.length, status: "resolved" });
   } catch (e) {
     await client.query("ROLLBACK");
+    console.error("[DB done] error:", e);
     res.status(500).json({ ok: false, error: e.message });
   } finally {
     client.release();
   }
 });
-
-/**
- * GET /api/db/alerts/in-progress
- * Query: ?company=...&q=...&since=ISO&until=ISO&limit=50&offset=0
- */
 app.get("/api/db/alerts/in-progress", async (req, res) => {
   try {
     const company =
@@ -837,8 +961,7 @@ app.get("/api/db/alerts/in-progress", async (req, res) => {
  * GET /api/db/alerts/done
  * Query: ?company=...&q=...&since=ISO&until=ISO&limit=50&offset=0
  *
- * ⚠️ IMPORTANT: on retourne les lignes en `resolved`
- * (et on accepte aussi `done` pour compatibilité ascendante).
+ * ✅ MODIFIÉ: Retourne maintenant les données complètes depuis resolved_alerts
  */
 app.get("/api/db/alerts/done", async (req, res) => {
   try {
@@ -854,14 +977,31 @@ app.get("/api/db/alerts/done", async (req, res) => {
 
     const rows = await pg.query(
       `
-      SELECT alert_id, status, type, taken_by, taken_at, updated_at
-      FROM alerts.alert_states
+      SELECT 
+        alert_id,
+        title,
+        description,
+        type,
+        vehicle,
+        driver,
+        location,
+        event_date,
+        event_time,
+        resolved_by,
+        resolved_at,
+        comments,
+        action_plan
+      FROM alerts.resolved_alerts
       WHERE company = $1
-        AND status IN ('resolved','done')
-        AND ($2::timestamp IS NULL OR updated_at >= $2)
-        AND ($3::timestamp IS NULL OR updated_at <= $3)
-        AND ($4::text IS NULL OR alert_id ILIKE $4)
-      ORDER BY updated_at DESC
+        AND ($2::timestamp IS NULL OR resolved_at >= $2)
+        AND ($3::timestamp IS NULL OR resolved_at <= $3)
+        AND ($4::text IS NULL OR (
+          alert_id ILIKE $4 OR 
+          title ILIKE $4 OR 
+          driver ILIKE $4 OR 
+          vehicle ILIKE $4
+        ))
+      ORDER BY resolved_at DESC
       LIMIT $5 OFFSET $6
       `,
       [company, since, until, q, limit, offset]
@@ -869,9 +1009,11 @@ app.get("/api/db/alerts/done", async (req, res) => {
 
     res.json({ ok: true, company, rows: rows.rows, count: rows.rowCount });
   } catch (e) {
+    console.error("[DB done get] error:", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 app.post("/api/reports/total-distance", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
   const auth = makeBasicHeader(username, password);
@@ -885,7 +1027,6 @@ app.post("/api/reports/total-distance", async (req, res) => {
 
     for (const [, trips] of tripsByDevice) {
       for (const t of trips) {
-        // PinMe renvoie souvent distance en mètres ; sinon distanceKm
         const m = Number(t?.distance);
         const kmField = Number(t?.distanceKm);
         if (Number.isFinite(m)) totalKm += m / 1000;
@@ -897,6 +1038,7 @@ app.post("/api/reports/total-distance", async (req, res) => {
     res.status(500).json({ ok: false, error: "total_distance_failed", detail: e.message });
   }
 });
+
 app.post("/api/reports/maintenance-efficiency", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
   const auth = makeBasicHeader(username, password);
@@ -910,7 +1052,6 @@ app.post("/api/reports/maintenance-efficiency", async (req, res) => {
 
     for (const [, maints] of lists) {
       total++;
-      // Heuristique : un enregistrement avec attributes.due <= 0 => échéance dépassée
       const overdue = Array.isArray(maints)
         ? maints.some((m) => Number(m?.attributes?.due) <= 0)
         : false;
@@ -923,7 +1064,6 @@ app.post("/api/reports/maintenance-efficiency", async (req, res) => {
     res.status(500).json({ ok: false, error: "maint_eff_failed", detail: e.message });
   }
 });
-
 
 /* =========================
    Static
