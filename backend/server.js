@@ -1,4 +1,4 @@
-// server.js  (ESM) - FIXED VERSION
+// server.js  (ESM) - MERGED VERSION
 
 import dotenv from "dotenv";
 dotenv.config(); // IMPORTANT: avant toute lecture de process.env
@@ -19,7 +19,7 @@ export const pg = new Pool({
   host: process.env.PGHOST || "localhost",
   port: Number(process.env.PGPORT || 5432),
   user: process.env.PGUSER || "postgres",
-  password: process.env.PGPASSWORD || "1234",   // ✅ FIX: Direct fallback sans String()
+  password: process.env.PGPASSWORD || "1234",
   database: process.env.PGDATABASE || "postgres",
   max: 10,
 });
@@ -203,14 +203,14 @@ app.post("/api/batch-data", async (req, res) => {
     });
     const allTrips = [];
     const allEvents = [];
-    
+
     for (const { trips, events } of results) {
       allTrips.push(...trips);
       allEvents.push(...events);
     }
 
     console.log(`[BATCH] Returning ${allTrips.length} trips and ${allEvents.length} events`);
-    
+
     res.json({
       ok: true,
       trips: allTrips,
@@ -275,6 +275,7 @@ async function fetchTripsForDevices(auth, deviceIds, from, to) {
   return new Map(entries);
 }
 
+// ✅ FIX: moyenne pondérée par distance (knots → km/h via * 1.852)
 app.post("/api/reports/average-speed", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
   const auth = makeBasicHeader(username, password);
@@ -284,21 +285,22 @@ app.post("/api/reports/average-speed", async (req, res) => {
 
   try {
     const tripsByDevice = await fetchTripsForDevices(auth, deviceIds, from, to);
-    let sum = 0, count = 0, used = new Set();
+    const allTrips = [];
+    const used = new Set();
     for (const [id, trips] of tripsByDevice) {
-      let local = 0, n = 0;
-      for (const t of trips) {
-        const v = Number(t?.averageSpeed);
-        if (Number.isFinite(v)) { local += v; n++; }
-      }
-      if (n > 0) { sum += local; count += n; used.add(id); }
+      used.add(id);
+      allTrips.push(...trips);
     }
-    res.json({ ok: true, averageSpeed: count ? sum / count : 0, tripsCount: count, devicesCountUsed: used.size });
+    const values = allTrips.map(item => Math.round(item.averageSpeed * 1.85200) * (item.distance / 1000));
+    const totalKms = allTrips.reduce((a, b) => a + (b.distance / 1000), 0);
+    const averageSpeed = totalKms > 0 ? Math.round((values.reduce((a, b) => a + b, 0)) / totalKms) : 0;
+    res.json({ ok: true, averageSpeed, summaryCount: allTrips.length, devicesCountUsed: used.size });
   } catch (e) {
     res.status(500).json({ ok: false, error: "avg_speed_failed", detail: e.message });
   }
 });
 
+// ✅ FIX: conversion knots → km/h (* 1.852)
 app.post("/api/reports/max-speed", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
   const auth = makeBasicHeader(username, password);
@@ -327,7 +329,7 @@ app.post("/api/reports/max-speed", async (req, res) => {
         }
       }
     }
-    res.json({ ok: true, maxSpeed, tripsCount, devicesCountUsed: used.size, meta });
+    res.json({ ok: true, maxSpeed: maxSpeed * 1.852, tripsCount, devicesCountUsed: used.size, meta });
   } catch (e) {
     res.status(500).json({ ok: false, error: "max_speed_failed", detail: e.message });
   }
@@ -856,9 +858,8 @@ app.post("/api/db/alerts/done", async (req, res) => {
         [company, alertId, type, username]
       );
 
-      // 2) ✅ COMPLET: Insérer dans resolved_alerts
+      // 2) Insérer dans resolved_alerts
       if (typeof alertData === 'object' && alertData.title) {
-        // Parser la date de l'événement pour TIMESTAMP
         let alertOccurredAt = null;
         if (alertData.date && alertData.time) {
           try {
@@ -874,38 +875,38 @@ app.post("/api/db/alerts/done", async (req, res) => {
         await client.query(
           `
           INSERT INTO alerts.resolved_alerts
-            (company, alert_id, title, description, type, vehicle, driver, location, 
-             event_date, event_time, alert_occurred_at, 
+            (company, alert_id, title, description, type, vehicle, driver, location,
+             event_date, event_time, alert_occurred_at,
              resolved_by, resolved_by_user, resolved_at, original_created_at,
              comments, action_plan)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-          ON CONFLICT (company, alert_id) 
+          ON CONFLICT (company, alert_id)
           DO UPDATE SET
-            resolved_at = EXCLUDED.resolved_at,
-            resolved_by = EXCLUDED.resolved_by,
+            resolved_at      = EXCLUDED.resolved_at,
+            resolved_by      = EXCLUDED.resolved_by,
             resolved_by_user = EXCLUDED.resolved_by_user
           `,
           [
-            company,                                    // $1
-            alertId,                                    // $2
-            alertData.title || '',                      // $3
-            alertData.description || '',                // $4
-            alertData.type || 'success',                // $5
-            alertData.vehicle || '—',                   // $6
-            alertData.driver || '—',                    // $7
-            alertData.location || 'Localisation inconnue', // $8
-            alertData.date || null,                     // $9
-            alertData.time || null,                     // $10
-            alertOccurredAt,                            // $11 ✅ TIMESTAMP
-            username || 'system',                       // $12
-            username || 'system',                       // $13 ✅ USER COMPLET
-            now,                                        // $14 ✅ DATE RÉSOLUTION
-            alertData.createdAt || nowISO,              // $15 ✅ DATE CRÉATION
-            JSON.stringify(alertData.comments || []),   // $16
-            JSON.stringify(alertData.actionPlan || [])  // $17
+            company,
+            alertId,
+            alertData.title || '',
+            alertData.description || '',
+            alertData.type || 'success',
+            alertData.vehicle || '—',
+            alertData.driver || '—',
+            alertData.location || 'Localisation inconnue',
+            alertData.date || null,
+            alertData.time || null,
+            alertOccurredAt,
+            username || 'system',
+            username || 'system',
+            now,
+            alertData.createdAt || nowISO,
+            JSON.stringify(alertData.comments || []),
+            JSON.stringify(alertData.actionPlan || [])
           ]
         );
-        
+
         console.log(`✅ Saved resolved alert ${alertId}:`);
         console.log(`   📍 Location: ${alertData.location}`);
         console.log(`   👤 Driver: ${alertData.driver}`);
@@ -924,6 +925,11 @@ app.post("/api/db/alerts/done", async (req, res) => {
     client.release();
   }
 });
+
+/**
+ * GET /api/db/alerts/in-progress
+ * Query: ?company=...&q=...&since=ISO&until=ISO&limit=50&offset=0
+ */
 app.get("/api/db/alerts/in-progress", async (req, res) => {
   try {
     const company =
@@ -960,8 +966,7 @@ app.get("/api/db/alerts/in-progress", async (req, res) => {
 /**
  * GET /api/db/alerts/done
  * Query: ?company=...&q=...&since=ISO&until=ISO&limit=50&offset=0
- *
- * ✅ MODIFIÉ: Retourne maintenant les données complètes depuis resolved_alerts
+ * Retourne les données complètes depuis resolved_alerts
  */
 app.get("/api/db/alerts/done", async (req, res) => {
   try {
@@ -977,7 +982,7 @@ app.get("/api/db/alerts/done", async (req, res) => {
 
     const rows = await pg.query(
       `
-      SELECT 
+      SELECT
         alert_id,
         title,
         description,
@@ -996,9 +1001,9 @@ app.get("/api/db/alerts/done", async (req, res) => {
         AND ($2::timestamp IS NULL OR resolved_at >= $2)
         AND ($3::timestamp IS NULL OR resolved_at <= $3)
         AND ($4::text IS NULL OR (
-          alert_id ILIKE $4 OR 
-          title ILIKE $4 OR 
-          driver ILIKE $4 OR 
+          alert_id ILIKE $4 OR
+          title ILIKE $4 OR
+          driver ILIKE $4 OR
           vehicle ILIKE $4
         ))
       ORDER BY resolved_at DESC
