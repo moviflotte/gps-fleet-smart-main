@@ -247,7 +247,7 @@ export default function Dashboard() {
 
       setSpeedAvg(Number(avg?.averageSpeed || 0))
       setSpeedMax(Number(max?.maxSpeed || 0))
-      setFuelAvg(Number(fuel?.averageFuel || 0))
+setFuelAvg(Number(fuel?.avgConsumption || 0))
       setFuelTotal(Number(fuel?.totalFuel || 0))
       setActiveCount(Number(act?.count || 0))
       setDistanceTotalKm(Number(dist?.totalKm || 0))
@@ -424,7 +424,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      <FilterComparisonBlock />
+<FilterComparisonBlock isLoggedIn={isAlreadyLogged} />
 
       {/* Graphiques avec légendes améliorées */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

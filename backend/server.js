@@ -1,7 +1,7 @@
-// server.js  (ESM) - MERGED VERSION
+// server.js  (ESM) - FIXED VERSION - all routes use getSession()
 
 import dotenv from "dotenv";
-dotenv.config(); // IMPORTANT: avant toute lecture de process.env
+dotenv.config();
 
 import express from "express";
 import axios from "axios";
@@ -13,7 +13,7 @@ import pkg from "pg";
 const { Pool } = pkg;
 
 /* =========================
-   PostgreSQL Pool - FIXED
+   PostgreSQL Pool
 ========================= */
 export const pg = new Pool({
   host: process.env.PGHOST || "localhost",
@@ -24,7 +24,6 @@ export const pg = new Pool({
   max: 10,
 });
 
-// Test connexion au démarrage
 pg.connect()
   .then((c) => c.query("SELECT 1").finally(() => c.release()))
   .then(() => console.log("[✅ PostgreSQL] Connected"))
@@ -41,7 +40,6 @@ const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 8088);
 const BASE = (process.env.UPSTREAM_BASE || "https://api.pinme.io/api").replace(/\/+$/, "");
-const TEST_PATH = process.env.TEST_PATH || "/devices";
 
 const ADMIN_USER = process.env.ADMIN_USER || "";
 const ADMIN_PASS = process.env.ADMIN_PASS || "";
@@ -59,13 +57,53 @@ const upstream = axios.create({
 });
 
 /* =========================
+   Session management
+   PinMe uses Traccar-style session:
+   POST /session (form-encoded) → Set-Cookie: JSESSIONID=...
+========================= */
+const sessionCache = new Map(); // cacheKey → JSESSIONID cookie string
+
+async function getSession(username, password) {
+  const key = `${username}:${password}`;
+  if (sessionCache.has(key)) return sessionCache.get(key);
+
+  console.log(`[LOGIN] Trying: POST ${BASE}/session with email=${username}`);
+
+  const r = await upstream.post(
+    "/session",
+    new URLSearchParams({ email: username, password }),
+    { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+  );
+
+  if (r.status >= 400) throw new Error(`login_failed_${r.status}`);
+
+  // Extract JSESSIONID from Set-Cookie header
+  const setCookie = r.headers["set-cookie"] || [];
+  const jsession = setCookie
+    .map((c) => c.split(";")[0])
+    .find((c) => c.startsWith("JSESSIONID="));
+
+  if (!jsession) throw new Error("no_session_cookie");
+
+  sessionCache.set(key, jsession);
+  // Auto-expire after 25 minutes
+  setTimeout(() => sessionCache.delete(key), 25 * 60 * 1000);
+
+  console.log(`[✅ Session] Logged in as ${username}`);
+  return jsession;
+}
+
+// For admin operations (persistence endpoints)
+async function getAdminSession() {
+  if (!ADMIN_USER || !ADMIN_PASS) throw new Error("admin_credentials_missing");
+  return getSession(ADMIN_USER, ADMIN_PASS);
+}
+
+/* =========================
    Helpers
 ========================= */
-function makeBasicHeader(u, p) {
-  if (!u || !p) return null;
-  return "Basic " + Buffer.from(`${u}:${p}`).toString("base64");
-}
 const asArr = (d) => (Array.isArray(d) ? d : d ? [d] : []);
+
 function companyFromUsername(u = "") {
   const base = String(u).split("@")[0] || "";
   return (
@@ -88,6 +126,7 @@ const DEFAULT_TTL = {
   meta: 5 * 60_000,
 };
 const cacheKey = (...parts) => parts.join("|");
+
 async function memo(key, ttl, fetcher) {
   const now = Date.now();
   const hit = cache.get(key);
@@ -122,15 +161,17 @@ async function runPool(items, limit, worker) {
   await Promise.all(runners);
   return results;
 }
+
 const CONCURRENCY = Number(process.env.UPSTREAM_CONCURRENCY || 10);
 
 /* =========================
    Shared fetchers PinMe
+   (all use Cookie: JSESSIONID=...)
 ========================= */
 async function getDevices(auth) {
   const key = cacheKey("devices", auth);
   return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/devices", { headers: { Authorization: auth }, params: { all: true } });
+    const r = await upstream.get("/devices", { headers: { Cookie: auth }, params: { all: true } });
     if (r.status >= 400) throw new Error(`devices ${r.status}`);
     return asArr(r.data);
   });
@@ -138,7 +179,7 @@ async function getDevices(auth) {
 async function getGroups(auth) {
   const key = cacheKey("groups", auth);
   return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/groups", { headers: { Authorization: auth }, params: { all: true } });
+    const r = await upstream.get("/groups", { headers: { Cookie: auth }, params: { all: true } });
     if (r.status >= 400) throw new Error(`groups ${r.status}`);
     return asArr(r.data);
   });
@@ -146,7 +187,7 @@ async function getGroups(auth) {
 async function getNotifications(auth) {
   const key = cacheKey("notifications", auth);
   return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/notifications", { headers: { Authorization: auth }, params: { all: true } });
+    const r = await upstream.get("/notifications", { headers: { Cookie: auth }, params: { all: true } });
     if (r.status >= 400) return [];
     return asArr(r.data);
   });
@@ -154,7 +195,7 @@ async function getNotifications(auth) {
 async function getGeofences(auth) {
   const key = cacheKey("geofences", auth);
   return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/geofences", { headers: { Authorization: auth }, params: { all: true } });
+    const r = await upstream.get("/geofences", { headers: { Cookie: auth }, params: { all: true } });
     if (r.status >= 400) return [];
     return asArr(r.data);
   });
@@ -162,7 +203,15 @@ async function getGeofences(auth) {
 async function getTrips(auth, deviceId, from, to) {
   const key = cacheKey("trips", auth, deviceId, from, to);
   return memo(key, DEFAULT_TTL.trips, async () => {
-    const r = await upstream.get("/reports/trips", { headers: { Authorization: auth }, params: { deviceId, from, to } });
+    const r = await upstream.get("/reports/trips", { headers: { Cookie: auth }, params: { deviceId, from, to } });
+    if (r.status >= 400) return [];
+    return asArr(r.data);
+  });
+}
+async function getSummary(auth, deviceId, from, to) {
+  const key = cacheKey("summary", auth, deviceId, from, to);
+  return memo(key, DEFAULT_TTL.trips, async () => {
+    const r = await upstream.get("/reports/summary", { headers: { Cookie: auth }, params: { deviceId, from, to } });
     if (r.status >= 400) return [];
     return asArr(r.data);
   });
@@ -170,7 +219,7 @@ async function getTrips(auth, deviceId, from, to) {
 async function getEvents(auth, deviceId, from, to) {
   const key = cacheKey("events", auth, deviceId, from, to);
   return memo(key, DEFAULT_TTL.events, async () => {
-    const r = await upstream.get("/reports/events", { headers: { Authorization: auth }, params: { deviceId, from, to } });
+    const r = await upstream.get("/reports/events", { headers: { Cookie: auth }, params: { deviceId, from, to } });
     if (r.status >= 400) return [];
     return asArr(r.data);
   });
@@ -178,112 +227,124 @@ async function getEvents(auth, deviceId, from, to) {
 async function getMaint(auth, deviceId) {
   const key = cacheKey("maint", auth, deviceId);
   return memo(key, DEFAULT_TTL.maint, async () => {
-    const r = await upstream.get("/maintenance", { headers: { Authorization: auth }, params: { deviceId } });
+    const r = await upstream.get("/maintenance", { headers: { Cookie: auth }, params: { deviceId } });
     if (r.status >= 400) return [];
     return asArr(r.data);
   });
 }
 
-app.post("/api/batch-data", async (req, res) => {
-  const { username, password, deviceIds, from, to } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
-  if (!Array.isArray(deviceIds) || deviceIds.length === 0) {
-    return res.status(400).json({ ok: false, error: "no_devices" });
-  }
-  if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
-  try {
-    console.log(`[BATCH] Fetching trips+events for ${deviceIds.length} devices`);
-    const results = await runPool(deviceIds, CONCURRENCY, async (id) => {
-      const [trips, events] = await Promise.all([
-        getTrips(auth, id, from, to),
-        getEvents(auth, id, from, to),
-      ]);
-      return { deviceId: id, trips, events };
-    });
-    const allTrips = [];
-    const allEvents = [];
-
-    for (const { trips, events } of results) {
-      allTrips.push(...trips);
-      allEvents.push(...events);
-    }
-
-    console.log(`[BATCH] Returning ${allTrips.length} trips and ${allEvents.length} events`);
-
-    res.json({
-      ok: true,
-      trips: allTrips,
-      events: allEvents,
-      count: { trips: allTrips.length, events: allEvents.length }
-    });
-  } catch (e) {
-    console.error("[BATCH] Error:", e);
-    res.status(500).json({ ok: false, error: "batch_failed", detail: e.message });
-  }
-});
-
 /* =========================
-   AUTH + basic resources
-========================= */
-app.post("/api/login", async (req, res) => {
-  const { username, password } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
-  try {
-    const r = await upstream.get(TEST_PATH, { headers: { Authorization: auth }, params: { all: true } });
-    if (r.status >= 400) {
-      const status = r.status;
-      if (status === 401 || status === 403) return res.status(status).json({ ok: false, error: "invalid_credentials", status });
-      return res.status(status).json({ ok: false, error: "upstream_error", status, detail: r.data });
-    }
-    res.json({ ok: true, status: r.status });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: "network_error", detail: e.message });
-  }
-});
-
-app.post("/api/devices", async (req, res) => {
-  const { username, password } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
-  try {
-    const data = await getDevices(auth);
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ ok: false, error: "devices_failed", detail: e.message });
-  }
-});
-
-app.post("/api/groups", async (req, res) => {
-  const { username, password } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
-  try {
-    const data = await getGroups(auth);
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ ok: false, error: "groups_failed", detail: e.message });
-  }
-});
-
-/* =========================
-   KPIs endpoints (résumé)
+   KPI helpers
 ========================= */
 async function fetchTripsForDevices(auth, deviceIds, from, to) {
   const entries = await runPool(deviceIds, CONCURRENCY, async (id) => [id, await getTrips(auth, id, from, to)]);
   return new Map(entries);
 }
 
-// ✅ FIX: moyenne pondérée par distance (knots → km/h via * 1.852)
+async function fetchSummaryForDevices(auth, deviceIds, from, to) {
+  const entries = await runPool(deviceIds, CONCURRENCY, async (id) => [id, await getSummary(auth, id, from, to)]);
+  return new Map(entries);
+}
+
+/* =========================
+   AUTH
+========================= */
+app.post("/api/login", async (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password)
+    return res.status(400).json({ ok: false, error: "missing_credentials" });
+  try {
+    await getSession(username, password);
+    res.json({ ok: true });
+  } catch (e) {
+    const msg = String(e.message || "");
+    if (msg.includes("401") || msg.includes("403") || msg.includes("login_failed"))
+      return res.status(401).json({ ok: false, error: "invalid_credentials" });
+    res.status(500).json({ ok: false, error: "network_error", detail: msg });
+  }
+});
+
+/* =========================
+   LISTS
+========================= */
+app.post("/api/devices", async (req, res) => {
+  const { username, password } = req.body || {};
+  try {
+    const auth = await getSession(username, password);
+    const data = await getDevices(auth);
+    res.json(data);
+  } catch (e) {
+    const status = e.message?.includes("missing_credentials") ? 400 : 500;
+    res.status(status).json({ ok: false, error: "devices_failed", detail: e.message });
+  }
+});
+
+app.post("/api/groups", async (req, res) => {
+  const { username, password } = req.body || {};
+  try {
+    const auth = await getSession(username, password);
+    const data = await getGroups(auth);
+    res.json(data);
+  } catch (e) {
+    const status = e.message?.includes("missing_credentials") ? 400 : 500;
+    res.status(status).json({ ok: false, error: "groups_failed", detail: e.message });
+  }
+});
+
+/* =========================
+   BATCH DATA
+========================= */
+app.post("/api/batch-data", async (req, res) => {
+  const { username, password, deviceIds, from, to } = req.body || {};
+  if (!Array.isArray(deviceIds) || deviceIds.length === 0)
+    return res.status(400).json({ ok: false, error: "no_devices" });
+  if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
+  try {
+    const auth = await getSession(username, password);
+
+    // ✅ Limite à 50 devices max pour éviter timeout
+    const limitedIds = deviceIds.slice(0, 50);
+    console.log(`[BATCH] Processing ${limitedIds.length}/${deviceIds.length} devices`);
+
+    const results = await runPool(limitedIds, 4, async (id) => { // ✅ concurrency 4 au lieu de 10
+      try {
+        const [trips, events] = await Promise.allSettled([
+          getTrips(auth, id, from, to),
+          getEvents(auth, id, from, to),
+        ]);
+        return {
+          deviceId: id,
+          trips: trips.status === 'fulfilled' ? trips.value : [],
+          events: events.status === 'fulfilled' ? events.value : [],
+        };
+      } catch (e) {
+        return { deviceId: id, trips: [], events: [] }; // ✅ ne pas bloquer sur un device
+      }
+    });
+
+    const allTrips = [];
+    const allEvents = [];
+    for (const r of results.filter(Boolean)) {
+      allTrips.push(...(r.trips || []));
+      allEvents.push(...(r.events || []));
+    }
+
+    res.json({ ok: true, trips: allTrips, events: allEvents, count: { trips: allTrips.length, events: allEvents.length } });
+  } catch (e) {
+    console.error("[BATCH] Error:", e.message);
+    res.status(500).json({ ok: false, error: "batch_failed", detail: e.message });
+  }
+});
+
+/* =========================
+   KPI REPORTS
+========================= */
 app.post("/api/reports/average-speed", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
-
   try {
+    const auth = await getSession(username, password);
     const tripsByDevice = await fetchTripsForDevices(auth, deviceIds, from, to);
     const allTrips = [];
     const used = new Set();
@@ -291,26 +352,24 @@ app.post("/api/reports/average-speed", async (req, res) => {
       used.add(id);
       allTrips.push(...trips);
     }
-    const values = allTrips.map(item => Math.round(item.averageSpeed * 1.85200) * (item.distance / 1000));
+    const values = allTrips.map(item => Math.round(item.averageSpeed * 1.852) * (item.distance / 1000));
     const totalKms = allTrips.reduce((a, b) => a + (b.distance / 1000), 0);
-    const averageSpeed = totalKms > 0 ? Math.round((values.reduce((a, b) => a + b, 0)) / totalKms) : 0;
+    const averageSpeed = totalKms > 0 ? Math.round(values.reduce((a, b) => a + b, 0) / totalKms) : 0;
     res.json({ ok: true, averageSpeed, summaryCount: allTrips.length, devicesCountUsed: used.size });
   } catch (e) {
-    res.status(500).json({ ok: false, error: "avg_speed_failed", detail: e.message });
+    res.status(500).json({ ok: false, error: "average_speed_failed", detail: e.message });
   }
 });
 
-// ✅ FIX: conversion knots → km/h (* 1.852)
 app.post("/api/reports/max-speed", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
-
   try {
+    const auth = await getSession(username, password);
     const tripsByDevice = await fetchTripsForDevices(auth, deviceIds, from, to);
-    let maxSpeed = 0, meta = null, tripsCount = 0, used = new Set();
+    let maxSpeed = 0, meta = null, tripsCount = 0;
+    const used = new Set();
     for (const [id, trips] of tripsByDevice) {
       used.add(id);
       for (const t of trips) {
@@ -319,12 +378,7 @@ app.post("/api/reports/max-speed", async (req, res) => {
           tripsCount++;
           if (v > maxSpeed) {
             maxSpeed = v;
-            meta = {
-              deviceId: t?.deviceId ?? id,
-              deviceName: t?.deviceName ?? String(id),
-              startTime: t?.startTime || null,
-              endTime: t?.endTime || null,
-            };
+            meta = { deviceId: t?.deviceId ?? id, deviceName: t?.deviceName ?? String(id), startTime: t?.startTime || null, endTime: t?.endTime || null };
           }
         }
       }
@@ -337,28 +391,25 @@ app.post("/api/reports/max-speed", async (req, res) => {
 
 app.post("/api/reports/avg-fuel", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
-
   try {
-    const tripsByDevice = await fetchTripsForDevices(auth, deviceIds, from, to);
-    let sumFuel = 0, tripsCount = 0, used = new Set();
-    const clamp = (x) => {
-      const v = Number(x);
-      if (!Number.isFinite(v)) return null;
-      return v < 0 ? 0 : v;
-    };
-    for (const [id, trips] of tripsByDevice) {
-      if (trips.length) used.add(id);
-      for (const t of trips) {
-        const v = clamp(t?.spentFuel);
-        if (v !== null) { sumFuel += v; tripsCount++; }
+    const auth = await getSession(username, password);
+    const summaryByDevice = await fetchSummaryForDevices(auth, deviceIds, from, to);
+    let totalFuel = 0, totalDistance = 0, summaryCount = 0;
+    const used = new Set();
+    const clamp = (x) => { const v = Number(x); if (!Number.isFinite(v)) return null; return v < 0 ? 0 : v; };
+    for (const [id, summaries] of summaryByDevice) {
+      if (summaries.length) used.add(id);
+      for (const s of summaries) {
+        const fuel = clamp(s?.spentFuel);
+        const distance = clamp(s?.distance);
+        if (fuel !== null && distance !== null) { totalFuel += fuel; totalDistance += distance; summaryCount++; }
       }
     }
-    if (sumFuel < 0) sumFuel = 0;
-    res.json({ ok: true, averageFuel: tripsCount ? sumFuel / tripsCount : 0, totalFuel: sumFuel, tripsCount, devicesCountUsed: used.size });
+    const distanceKm = totalDistance / 1000;
+    const avgConsumption = distanceKm > 0 ? (totalFuel * 100) / distanceKm : 0;
+    res.json({ ok: true, avgConsumption, totalFuel, totalDistanceKm: distanceKm, summaryCount, devicesCountUsed: used.size });
   } catch (e) {
     res.status(500).json({ ok: false, error: "avg_fuel_failed", detail: e.message });
   }
@@ -366,12 +417,10 @@ app.post("/api/reports/avg-fuel", async (req, res) => {
 
 app.post("/api/reports/active-devices", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
-
   try {
+    const auth = await getSession(username, password);
     const tripsByDevice = await fetchTripsForDevices(auth, deviceIds, from, to);
     const activeSet = new Set();
     for (const [id, trips] of tripsByDevice) if (trips.length > 0) activeSet.add(id);
@@ -381,17 +430,56 @@ app.post("/api/reports/active-devices", async (req, res) => {
   }
 });
 
+app.post("/api/reports/total-distance", async (req, res) => {
+  const { username, password, deviceIds, from, to } = req.body || {};
+  if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
+  if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
+  try {
+    const auth = await getSession(username, password);
+    const summaryByDevice = await fetchSummaryForDevices(auth, deviceIds, from, to);
+    let totalDistance = 0, summaryCount = 0;
+    const used = new Set();
+    for (const [id, summaries] of summaryByDevice) {
+      if (summaries.length) used.add(id);
+      for (const s of summaries) {
+        const distance = Number(s?.distance);
+        if (Number.isFinite(distance) && distance > 0) { totalDistance += distance; summaryCount++; }
+      }
+    }
+    res.json({ ok: true, totalKm: Math.max(0, totalDistance / 1000), summaryCount, devicesCountUsed: used.size });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: "total_distance_failed", detail: e.message });
+  }
+});
+
+app.post("/api/reports/maintenance-efficiency", async (req, res) => {
+  const { username, password, deviceIds, from, to } = req.body || {};
+  if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
+  if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
+  try {
+    const auth = await getSession(username, password);
+    const lists = await runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)]);
+    let total = 0, ok = 0;
+    for (const [, maints] of lists) {
+      total++;
+      const overdue = Array.isArray(maints) ? maints.some((m) => Number(m?.attributes?.due) <= 0) : false;
+      if (!overdue) ok++;
+    }
+    res.json({ ok: true, efficiency: total > 0 ? (ok / total) * 100 : 0, total });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: "maint_eff_failed", detail: e.message });
+  }
+});
+
 /* =========================
-   Vehicle alerts (PinMe)
+   VEHICLE ALERTS
 ========================= */
 app.post("/api/reports/events", async (req, res) => {
   const { username, password, deviceId, from, to } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!deviceId) return res.status(400).json({ ok: false, error: "no_device" });
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
-
   try {
+    const auth = await getSession(username, password);
     const events = await getEvents(auth, deviceId, from, to);
     res.json(events);
   } catch (e) {
@@ -401,12 +489,10 @@ app.post("/api/reports/events", async (req, res) => {
 
 app.post("/api/reports/trips", async (req, res) => {
   const { username, password, deviceId, from, to } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!deviceId) return res.status(400).json({ ok: false, error: "no_device" });
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
-
   try {
+    const auth = await getSession(username, password);
     const trips = await getTrips(auth, deviceId, from, to);
     res.json(trips);
   } catch (e) {
@@ -416,13 +502,12 @@ app.post("/api/reports/trips", async (req, res) => {
 
 app.post("/api/reports/vehicle-alerts", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
-
   try {
+    const auth = await getSession(username, password);
     const [notifs, geofences] = await Promise.all([getNotifications(auth), getGeofences(auth)]);
+
     const notifMap = new Map();
     for (const n of asArr(notifs)) {
       const id = Number(n?.id);
@@ -442,10 +527,7 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
       const t = (ev?.type || "").toLowerCase();
       if (t === "ignitionon") return "en_service";
       if (t === "ignitionoff") return "arret";
-      if (t === "alarm") {
-        const al = (ev?.attributes?.alarm || "").toLowerCase();
-        if (al.includes("idle")) return "idle";
-      }
+      if (t === "alarm") { const al = (ev?.attributes?.alarm || "").toLowerCase(); if (al.includes("idle")) return "idle"; }
       const ids = parseNotifIds(ev?.attributes?.notifications || ev?.attributes?.notificationId);
       for (const id of ids) {
         const lbl = (notifMap.get(id) || "").toLowerCase();
@@ -461,9 +543,7 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
       const arr = asArr(arr0).slice().sort((a, b) => (Date.parse(a?.serverTime) || 0) - (Date.parse(b?.serverTime) || 0));
       const alertsSet = new Set();
       const geosSet = new Set();
-      let alertOccurrences = 0;
-      let lastState = null;
-      let lastTs = 0;
+      let alertOccurrences = 0, lastState = null, lastTs = 0;
 
       for (const ev of arr) {
         if (ev?.type && ev.type !== "alarm") { alertsSet.add(String(ev.type)); alertOccurrences += 1; }
@@ -473,7 +553,6 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
         if (ev?.type === "alarm") alertOccurrences += ids.length > 0 ? ids.length : 1;
         const gid = Number(ev?.geofenceId);
         if (Number.isFinite(gid) && gid > 0) geosSet.add(geofenceMap.get(gid) || `geofence:${gid}`);
-
         const st = inferStateFromEvent(ev);
         const ts = Date.parse(ev?.serverTime) || 0;
         if (st && ts >= lastTs) { lastState = st; lastTs = ts; }
@@ -499,41 +578,34 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
 
 /* =========================================================
    PERSISTENCE PinMe (/attributes/computed)
+   Uses admin session
 ========================================================= */
-function adminAuthHeader() {
-  const h = makeBasicHeader(ADMIN_USER, ADMIN_PASS);
-  if (!h) throw new Error("admin_credentials_missing");
-  return h;
-}
 function keyForCompany(company) {
   return `fleet.alerts.state.${String(company || "default").toLowerCase()}`;
 }
 async function loadCompanyState(company) {
   const key = keyForCompany(company);
-  const auth = adminAuthHeader();
-
-  const list = await upstream.get("/attributes/computed", { headers: { Authorization: auth }, params: { all: true } });
+  const auth = await getAdminSession();
+  const list = await upstream.get("/attributes/computed", { headers: { Cookie: auth }, params: { all: true } });
   if (list.status >= 400) throw new Error(`pinme_list_failed_${list.status}`);
-
   const found = asArr(list.data).find((a) => String(a?.attribute) === key);
   if (!found) return { id: null, state: {} };
-
   let parsed = {};
   try { parsed = JSON.parse(found.expression || "{}"); } catch {}
   return { id: Number(found.id), state: parsed || {} };
 }
 async function createCompanyState(company, initialObj = {}) {
   const key = keyForCompany(company);
-  const auth = adminAuthHeader();
+  const auth = await getAdminSession();
   const payload = { attribute: key, description: "Fleet Alerts State (shared by company)", expression: JSON.stringify(initialObj || {}) };
-  const r = await upstream.post("/attributes/computed", payload, { headers: { Authorization: auth } });
+  const r = await upstream.post("/attributes/computed", payload, { headers: { Cookie: auth } });
   if (r.status >= 400) throw new Error(`pinme_create_failed_${r.status}`);
   const id = Number(r.data?.id);
   return { id: Number.isFinite(id) ? id : null, state: initialObj || {} };
 }
 async function updateCompanyState(id, obj) {
-  const auth = adminAuthHeader();
-  const r = await upstream.put(`/attributes/computed/${id}`, { expression: JSON.stringify(obj || {}) }, { headers: { Authorization: auth } });
+  const auth = await getAdminSession();
+  const r = await upstream.put(`/attributes/computed/${id}`, { expression: JSON.stringify(obj || {}) }, { headers: { Cookie: auth } });
   if (r.status >= 400) throw new Error(`pinme_update_failed_${r.status}`);
   return true;
 }
@@ -543,7 +615,6 @@ app.post("/api/alerts/state/get", async (req, res) => {
     const { company: rawCompany, ids = [], username } = req.body || {};
     const company = rawCompany || companyFromUsername(username || "");
     if (!ADMIN_USER || !ADMIN_PASS) return res.status(403).json({ ok: false, error: "admin_required" });
-
     const { state } = await loadCompanyState(company);
     const out = {};
     const list = Array.isArray(ids) && ids.length ? ids : Object.keys(state || {});
@@ -559,32 +630,17 @@ app.post("/api/alerts/state/patch", async (req, res) => {
     const { company: rawCompany, patches = [], username } = req.body || {};
     const company = rawCompany || companyFromUsername(username || "");
     if (!ADMIN_USER || !ADMIN_PASS) return res.status(403).json({ ok: false, error: "admin_required" });
-
     let { id, state } = await loadCompanyState(company);
-    if (!id) {
-      const created = await createCompanyState(company, {});
-      id = created.id;
-      state = created.state;
-    }
+    if (!id) { const created = await createCompanyState(company, {}); id = created.id; state = created.state; }
     if (!id) return res.status(500).json({ ok: false, error: "create_state_failed" });
-
     const now = new Date().toISOString();
     for (const p of asArr(patches)) {
       const aid = String(p?.id || "").trim();
       if (!aid) continue;
       const patch = p?.patch && typeof p.patch === "object" ? p.patch : {};
       const prev = state[aid] && typeof state[aid] === "object" ? state[aid] : {};
-
-      state[aid] = {
-        ...prev,
-        ...patch,
-        updatedAt: now,
-        updatedBy: username || prev.updatedBy || null,
-        takenBy: prev.takenBy || (patch.status === "in_progress" ? username || null : prev.takenBy || null),
-        takenAt: prev.takenAt || (patch.status === "in_progress" ? now : prev.takenAt || null),
-      };
+      state[aid] = { ...prev, ...patch, updatedAt: now, updatedBy: username || prev.updatedBy || null, takenBy: prev.takenBy || (patch.status === "in_progress" ? username || null : prev.takenBy || null), takenAt: prev.takenAt || (patch.status === "in_progress" ? now : prev.takenAt || null) };
     }
-
     await updateCompanyState(id, state);
     res.json({ ok: true, company, count: asArr(patches).length });
   } catch (e) {
@@ -595,94 +651,53 @@ app.post("/api/alerts/state/patch", async (req, res) => {
 /* =========================================================
    PERSISTENCE EN BASE (PostgreSQL)
 ========================================================= */
-
-// PATCH: upsert state + actions + add comments
 app.post("/api/db/alerts/state/patch", async (req, res) => {
   const { company, patches = [], username } = req.body || {};
   if (!company) return res.status(400).json({ ok: false, error: "missing_company" });
-
   const client = await pg.connect();
   try {
     await client.query("BEGIN");
     const now = new Date().toISOString();
-
     for (const p of Array.isArray(patches) ? patches : []) {
       const alertId = String(p?.id || "").trim();
       if (!alertId) continue;
       const patch = (p && p.patch) || {};
-
       const status = patch.status || null;
       const type = patch.type || null;
       const takenBy = status === "in_progress" ? (username || null) : null;
       const takenAt = status === "in_progress" ? now : null;
-
       await client.query(
-        `
-        INSERT INTO alerts.alert_states (company, alert_id, status, type, taken_by, taken_at, updated_at)
-        VALUES ($1,$2, COALESCE($3,'new'), COALESCE($4,'success'), $5, $6, now())
-        ON CONFLICT (company, alert_id)
-        DO UPDATE SET
-          status     = COALESCE(EXCLUDED.status, alerts.alert_states.status),
-          type       = COALESCE(EXCLUDED.type,   alerts.alert_states.type),
-          taken_by   = COALESCE(alerts.alert_states.taken_by, EXCLUDED.taken_by),
-          taken_at   = COALESCE(alerts.alert_states.taken_at, EXCLUDED.taken_at),
-          updated_at = now()
-        `,
+        `INSERT INTO alerts.alert_states (company, alert_id, status, type, taken_by, taken_at, updated_at)
+         VALUES ($1,$2, COALESCE($3,'new'), COALESCE($4,'success'), $5, $6, now())
+         ON CONFLICT (company, alert_id)
+         DO UPDATE SET status=COALESCE(EXCLUDED.status,alerts.alert_states.status), type=COALESCE(EXCLUDED.type,alerts.alert_states.type), taken_by=COALESCE(alerts.alert_states.taken_by,EXCLUDED.taken_by), taken_at=COALESCE(alerts.alert_states.taken_at,EXCLUDED.taken_at), updated_at=now()`,
         [company, alertId, status, type, takenBy, takenAt]
       );
-
       if (Array.isArray(patch.actionPlan)) {
         for (let i = 0; i < patch.actionPlan.length; i++) {
           const s = patch.actionPlan[i];
           if (!s || !s.id) continue;
           await client.query(
-            `
-            INSERT INTO alerts.alert_actions
-              (company, alert_id, action_id, label, done, position, created_by, created_at, updated_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7, now(), now())
-            ON CONFLICT (company, alert_id, action_id)
-            DO UPDATE SET
-              label      = EXCLUDED.label,
-              done       = EXCLUDED.done,
-              position   = EXCLUDED.position,
-              updated_at = now()
-            `,
-            [
-              company,
-              alertId,
-              String(s.id),
-              String(s.label || ""),
-              !!s.done,
-              Number.isFinite(+s.position) ? +s.position : i,
-              username || null,
-            ]
+            `INSERT INTO alerts.alert_actions (company, alert_id, action_id, label, done, position, created_by, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7, now(), now())
+             ON CONFLICT (company, alert_id, action_id)
+             DO UPDATE SET label=EXCLUDED.label, done=EXCLUDED.done, position=EXCLUDED.position, updated_at=now()`,
+            [company, alertId, String(s.id), String(s.label || ""), !!s.done, Number.isFinite(+s.position) ? +s.position : i, username || null]
           );
         }
       }
-
       if (Array.isArray(patch.comments)) {
         for (const c of patch.comments) {
           if (!c || !c.id) continue;
           await client.query(
-            `
-            INSERT INTO alerts.alert_comments
-              (company, alert_id, comment_id, text, author, at_local, created_at)
-            VALUES ($1,$2,$3,$4,$5,$6, now())
-            ON CONFLICT (company, alert_id, comment_id) DO NOTHING
-            `,
-            [
-              company,
-              alertId,
-              String(c.id),
-              String(c.text || ""),
-              c.author || username || null,
-              c.date || c.at_local || null,
-            ]
+            `INSERT INTO alerts.alert_comments (company, alert_id, comment_id, text, author, at_local, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6, now())
+             ON CONFLICT (company, alert_id, comment_id) DO NOTHING`,
+            [company, alertId, String(c.id), String(c.text || ""), c.author || username || null, c.date || c.at_local || null]
           );
         }
       }
     }
-
     await client.query("COMMIT");
     res.json({ ok: true, company, count: patches.length });
   } catch (e) {
@@ -694,67 +709,27 @@ app.post("/api/db/alerts/state/patch", async (req, res) => {
   }
 });
 
-// GET: assemblage states + actions + comments
 app.post("/api/db/alerts/state/get", async (req, res) => {
   const { company, ids = [] } = req.body || {};
   if (!company) return res.status(400).json({ ok: false, error: "missing_company" });
   const list = Array.isArray(ids) ? ids.map(String) : [];
-
   try {
     const st = await pg.query(
-      `SELECT company, alert_id, status, type, taken_by, taken_at, updated_at
-       FROM alerts.alert_states
-       WHERE company=$1 AND ($2::text[] IS NULL OR alert_id = ANY($2))`,
+      `SELECT company, alert_id, status, type, taken_by, taken_at, updated_at FROM alerts.alert_states WHERE company=$1 AND ($2::text[] IS NULL OR alert_id = ANY($2))`,
       [company, list.length ? list : null]
     );
-
     const ac = await pg.query(
-      `SELECT company, alert_id, action_id, label, done, position
-       FROM alerts.alert_actions
-       WHERE company=$1 AND ($2::text[] IS NULL OR alert_id = ANY($2))
-       ORDER BY position ASC, created_at ASC`,
+      `SELECT company, alert_id, action_id, label, done, position FROM alerts.alert_actions WHERE company=$1 AND ($2::text[] IS NULL OR alert_id = ANY($2)) ORDER BY position ASC, created_at ASC`,
       [company, list.length ? list : null]
     );
-
     const cm = await pg.query(
-      `SELECT company, alert_id, comment_id, text, author, at_local, created_at
-       FROM alerts.alert_comments
-       WHERE company=$1 AND ($2::text[] IS NULL OR alert_id = ANY($2))
-       ORDER BY created_at ASC`,
+      `SELECT company, alert_id, comment_id, text, author, at_local, created_at FROM alerts.alert_comments WHERE company=$1 AND ($2::text[] IS NULL OR alert_id = ANY($2)) ORDER BY created_at ASC`,
       [company, list.length ? list : null]
     );
-
     const out = {};
-    for (const r of st.rows) {
-      out[r.alert_id] = {
-        status: r.status,
-        type: r.type,
-        takenBy: r.taken_by,
-        takenAt: r.taken_at,
-        updatedAt: r.updated_at,
-        actionPlan: [],
-        comments: [],
-      };
-    }
-    for (const r of ac.rows) {
-      if (!out[r.alert_id]) out[r.alert_id] = { actionPlan: [], comments: [] };
-      out[r.alert_id].actionPlan.push({
-        id: r.action_id,
-        label: r.label,
-        done: r.done,
-        position: r.position,
-      });
-    }
-    for (const r of cm.rows) {
-      if (!out[r.alert_id]) out[r.alert_id] = { actionPlan: [], comments: [] };
-      out[r.alert_id].comments.push({
-        id: r.comment_id,
-        text: r.text,
-        author: r.author || "",
-        date: r.at_local || new Date(r.created_at).toLocaleString(),
-      });
-    }
-
+    for (const r of st.rows) out[r.alert_id] = { status: r.status, type: r.type, takenBy: r.taken_by, takenAt: r.taken_at, updatedAt: r.updated_at, actionPlan: [], comments: [] };
+    for (const r of ac.rows) { if (!out[r.alert_id]) out[r.alert_id] = { actionPlan: [], comments: [] }; out[r.alert_id].actionPlan.push({ id: r.action_id, label: r.label, done: r.done, position: r.position }); }
+    for (const r of cm.rows) { if (!out[r.alert_id]) out[r.alert_id] = { actionPlan: [], comments: [] }; out[r.alert_id].comments.push({ id: r.comment_id, text: r.text, author: r.author || "", date: r.at_local || new Date(r.created_at).toLocaleString() }); }
     res.json({ ok: true, states: out, company });
   } catch (e) {
     console.error("[DB get] error:", e);
@@ -762,11 +737,6 @@ app.post("/api/db/alerts/state/get", async (req, res) => {
   }
 });
 
-/* =========================================================
-   ENDPOINTS DÉDIÉS : "en cours" & "traitées" (DB PostgreSQL)
-========================================================= */
-
-// Helpers dédiés
 function getCompanyFromBody(body = {}) {
   const raw = body.company || companyFromUsername(body.username || "");
   return String(raw || "default").toLowerCase();
@@ -775,42 +745,26 @@ function normIds(arr) {
   return Array.isArray(arr) ? arr.map((x) => String(x)).filter(Boolean) : [];
 }
 
-/**
- * POST /api/db/alerts/in-progress
- * Body: { company?, username?, ids: string[], type? }
- */
 app.post("/api/db/alerts/in-progress", async (req, res) => {
   const company = getCompanyFromBody(req.body);
   const username = req.body?.username || null;
   const ids = normIds(req.body?.ids);
   const type = req.body?.type || null;
-
   if (!company) return res.status(400).json({ ok: false, error: "missing_company" });
   if (!ids.length) return res.status(400).json({ ok: false, error: "no_ids" });
-
   const client = await pg.connect();
   try {
     await client.query("BEGIN");
     const now = new Date().toISOString();
-
     for (const alertId of ids) {
       await client.query(
-        `
-        INSERT INTO alerts.alert_states
-          (company, alert_id, status, type, taken_by, taken_at, updated_at)
-        VALUES ($1,$2,'in_progress', COALESCE($3,'success'), $4, $5, now())
-        ON CONFLICT (company, alert_id)
-        DO UPDATE SET
-          status     = 'in_progress',
-          type       = COALESCE($3, alerts.alert_states.type),
-          taken_by   = COALESCE(alerts.alert_states.taken_by, $4),
-          taken_at   = COALESCE(alerts.alert_states.taken_at, $5),
-          updated_at = now()
-        `,
+        `INSERT INTO alerts.alert_states (company, alert_id, status, type, taken_by, taken_at, updated_at)
+         VALUES ($1,$2,'in_progress', COALESCE($3,'success'), $4, $5, now())
+         ON CONFLICT (company, alert_id)
+         DO UPDATE SET status='in_progress', type=COALESCE($3,alerts.alert_states.type), taken_by=COALESCE(alerts.alert_states.taken_by,$4), taken_at=COALESCE(alerts.alert_states.taken_at,$5), updated_at=now()`,
         [company, alertId, type, username, now]
       );
     }
-
     await client.query("COMMIT");
     res.json({ ok: true, company, count: ids.length, status: "in_progress" });
   } catch (e) {
@@ -821,100 +775,46 @@ app.post("/api/db/alerts/in-progress", async (req, res) => {
   }
 });
 
-/**
- * POST /api/db/alerts/done
- */
 app.post("/api/db/alerts/done", async (req, res) => {
   const company = getCompanyFromBody(req.body);
   const username = req.body?.username || null;
   const alertsData = Array.isArray(req.body?.ids) ? req.body.ids : [];
   const type = req.body?.type || null;
-
   if (!company) return res.status(400).json({ ok: false, error: "missing_company" });
   if (!alertsData.length) return res.status(400).json({ ok: false, error: "no_ids" });
-
   const client = await pg.connect();
   try {
     await client.query("BEGIN");
     const now = new Date();
     const nowISO = now.toISOString();
-
     for (const alertData of alertsData) {
-      const alertId = typeof alertData === 'string' ? alertData : alertData.id;
+      const alertId = typeof alertData === "string" ? alertData : alertData.id;
       if (!alertId) continue;
-
-      // 1) Mettre à jour alert_states
       await client.query(
-        `
-        INSERT INTO alerts.alert_states
-          (company, alert_id, status, type, taken_by, updated_at)
-        VALUES ($1, $2, 'resolved', COALESCE($3, 'success'), $4, now())
-        ON CONFLICT (company, alert_id)
-        DO UPDATE SET
-          status     = 'resolved',
-          type       = COALESCE($3, alerts.alert_states.type),
-          updated_at = now()
-        `,
+        `INSERT INTO alerts.alert_states (company, alert_id, status, type, taken_by, updated_at)
+         VALUES ($1,$2,'resolved', COALESCE($3,'success'), $4, now())
+         ON CONFLICT (company, alert_id)
+         DO UPDATE SET status='resolved', type=COALESCE($3,alerts.alert_states.type), updated_at=now()`,
         [company, alertId, type, username]
       );
-
-      // 2) Insérer dans resolved_alerts
-      if (typeof alertData === 'object' && alertData.title) {
+      if (typeof alertData === "object" && alertData.title) {
         let alertOccurredAt = null;
         if (alertData.date && alertData.time) {
           try {
             const parsed = new Date(`${alertData.date} ${alertData.time}`);
-            if (!isNaN(parsed.getTime())) {
-              alertOccurredAt = parsed.toISOString();
-            }
-          } catch (e) {
-            console.warn(`⚠️ Could not parse date: ${alertData.date} ${alertData.time}`);
-          }
+            if (!isNaN(parsed.getTime())) alertOccurredAt = parsed.toISOString();
+          } catch (e) { console.warn(`⚠️ Could not parse date: ${alertData.date} ${alertData.time}`); }
         }
-
         await client.query(
-          `
-          INSERT INTO alerts.resolved_alerts
-            (company, alert_id, title, description, type, vehicle, driver, location,
-             event_date, event_time, alert_occurred_at,
-             resolved_by, resolved_by_user, resolved_at, original_created_at,
-             comments, action_plan)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-          ON CONFLICT (company, alert_id)
-          DO UPDATE SET
-            resolved_at      = EXCLUDED.resolved_at,
-            resolved_by      = EXCLUDED.resolved_by,
-            resolved_by_user = EXCLUDED.resolved_by_user
-          `,
-          [
-            company,
-            alertId,
-            alertData.title || '',
-            alertData.description || '',
-            alertData.type || 'success',
-            alertData.vehicle || '—',
-            alertData.driver || '—',
-            alertData.location || 'Localisation inconnue',
-            alertData.date || null,
-            alertData.time || null,
-            alertOccurredAt,
-            username || 'system',
-            username || 'system',
-            now,
-            alertData.createdAt || nowISO,
-            JSON.stringify(alertData.comments || []),
-            JSON.stringify(alertData.actionPlan || [])
-          ]
+          `INSERT INTO alerts.resolved_alerts (company, alert_id, title, description, type, vehicle, driver, location, event_date, event_time, alert_occurred_at, resolved_by, resolved_by_user, resolved_at, original_created_at, comments, action_plan)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+           ON CONFLICT (company, alert_id)
+           DO UPDATE SET resolved_at=EXCLUDED.resolved_at, resolved_by=EXCLUDED.resolved_by, resolved_by_user=EXCLUDED.resolved_by_user`,
+          [company, alertId, alertData.title || "", alertData.description || "", alertData.type || "success", alertData.vehicle || "—", alertData.driver || "—", alertData.location || "Localisation inconnue", alertData.date || null, alertData.time || null, alertOccurredAt, username || "system", username || "system", now, alertData.createdAt || nowISO, JSON.stringify(alertData.comments || []), JSON.stringify(alertData.actionPlan || [])]
         );
-
-        console.log(`✅ Saved resolved alert ${alertId}:`);
-        console.log(`   📍 Location: ${alertData.location}`);
-        console.log(`   👤 Driver: ${alertData.driver}`);
-        console.log(`   📅 Occurred at: ${alertOccurredAt || 'unknown'}`);
-        console.log(`   ✅ Resolved by: ${username} at ${now.toISOString()}`);
+        console.log(`✅ Resolved alert ${alertId} by ${username}`);
       }
     }
-
     await client.query("COMMIT");
     res.json({ ok: true, company, count: alertsData.length, status: "resolved" });
   } catch (e) {
@@ -926,147 +826,42 @@ app.post("/api/db/alerts/done", async (req, res) => {
   }
 });
 
-/**
- * GET /api/db/alerts/in-progress
- * Query: ?company=...&q=...&since=ISO&until=ISO&limit=50&offset=0
- */
 app.get("/api/db/alerts/in-progress", async (req, res) => {
   try {
-    const company =
-      (req.query.company && String(req.query.company).toLowerCase()) || null;
+    const company = (req.query.company && String(req.query.company).toLowerCase()) || null;
     if (!company) return res.status(400).json({ ok: false, error: "missing_company" });
-
     const q = req.query.q ? `%${String(req.query.q)}%` : null;
     const since = req.query.since ? new Date(String(req.query.since)) : null;
     const until = req.query.until ? new Date(String(req.query.until)) : null;
     const limit = Math.min(Number(req.query.limit || 50), 500);
     const offset = Math.max(Number(req.query.offset || 0), 0);
-
     const rows = await pg.query(
-      `
-      SELECT alert_id, status, type, taken_by, taken_at, updated_at
-      FROM alerts.alert_states
-      WHERE company = $1
-        AND status = 'in_progress'
-        AND ($2::timestamp IS NULL OR updated_at >= $2)
-        AND ($3::timestamp IS NULL OR updated_at <= $3)
-        AND ($4::text IS NULL OR alert_id ILIKE $4)
-      ORDER BY updated_at DESC
-      LIMIT $5 OFFSET $6
-      `,
+      `SELECT alert_id, status, type, taken_by, taken_at, updated_at FROM alerts.alert_states WHERE company=$1 AND status='in_progress' AND ($2::timestamp IS NULL OR updated_at>=$2) AND ($3::timestamp IS NULL OR updated_at<=$3) AND ($4::text IS NULL OR alert_id ILIKE $4) ORDER BY updated_at DESC LIMIT $5 OFFSET $6`,
       [company, since, until, q, limit, offset]
     );
-
     res.json({ ok: true, company, rows: rows.rows, count: rows.rowCount });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-/**
- * GET /api/db/alerts/done
- * Query: ?company=...&q=...&since=ISO&until=ISO&limit=50&offset=0
- * Retourne les données complètes depuis resolved_alerts
- */
 app.get("/api/db/alerts/done", async (req, res) => {
   try {
-    const company =
-      (req.query.company && String(req.query.company).toLowerCase()) || null;
+    const company = (req.query.company && String(req.query.company).toLowerCase()) || null;
     if (!company) return res.status(400).json({ ok: false, error: "missing_company" });
-
     const q = req.query.q ? `%${String(req.query.q)}%` : null;
     const since = req.query.since ? new Date(String(req.query.since)) : null;
     const until = req.query.until ? new Date(String(req.query.until)) : null;
     const limit = Math.min(Number(req.query.limit || 50), 500);
     const offset = Math.max(Number(req.query.offset || 0), 0);
-
     const rows = await pg.query(
-      `
-      SELECT
-        alert_id,
-        title,
-        description,
-        type,
-        vehicle,
-        driver,
-        location,
-        event_date,
-        event_time,
-        resolved_by,
-        resolved_at,
-        comments,
-        action_plan
-      FROM alerts.resolved_alerts
-      WHERE company = $1
-        AND ($2::timestamp IS NULL OR resolved_at >= $2)
-        AND ($3::timestamp IS NULL OR resolved_at <= $3)
-        AND ($4::text IS NULL OR (
-          alert_id ILIKE $4 OR
-          title ILIKE $4 OR
-          driver ILIKE $4 OR
-          vehicle ILIKE $4
-        ))
-      ORDER BY resolved_at DESC
-      LIMIT $5 OFFSET $6
-      `,
+      `SELECT alert_id, title, description, type, vehicle, driver, location, event_date, event_time, resolved_by, resolved_at, comments, action_plan FROM alerts.resolved_alerts WHERE company=$1 AND ($2::timestamp IS NULL OR resolved_at>=$2) AND ($3::timestamp IS NULL OR resolved_at<=$3) AND ($4::text IS NULL OR (alert_id ILIKE $4 OR title ILIKE $4 OR driver ILIKE $4 OR vehicle ILIKE $4)) ORDER BY resolved_at DESC LIMIT $5 OFFSET $6`,
       [company, since, until, q, limit, offset]
     );
-
     res.json({ ok: true, company, rows: rows.rows, count: rows.rowCount });
   } catch (e) {
     console.error("[DB done get] error:", e);
     res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.post("/api/reports/total-distance", async (req, res) => {
-  const { username, password, deviceIds, from, to } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
-  if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
-  if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
-
-  try {
-    const tripsByDevice = await fetchTripsForDevices(auth, deviceIds, from, to);
-    let totalKm = 0;
-
-    for (const [, trips] of tripsByDevice) {
-      for (const t of trips) {
-        const m = Number(t?.distance);
-        const kmField = Number(t?.distanceKm);
-        if (Number.isFinite(m)) totalKm += m / 1000;
-        else if (Number.isFinite(kmField)) totalKm += kmField;
-      }
-    }
-    res.json({ ok: true, totalKm: Math.max(0, totalKm) });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: "total_distance_failed", detail: e.message });
-  }
-});
-
-app.post("/api/reports/maintenance-efficiency", async (req, res) => {
-  const { username, password, deviceIds, from, to } = req.body || {};
-  const auth = makeBasicHeader(username, password);
-  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
-  if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
-  if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
-
-  try {
-    const lists = await runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)]);
-    let total = 0, ok = 0;
-
-    for (const [, maints] of lists) {
-      total++;
-      const overdue = Array.isArray(maints)
-        ? maints.some((m) => Number(m?.attributes?.due) <= 0)
-        : false;
-      if (!overdue) ok++;
-    }
-
-    const efficiency = total > 0 ? (ok / total) * 100 : 0;
-    res.json({ ok: true, efficiency, total, ok });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: "maint_eff_failed", detail: e.message });
   }
 });
 

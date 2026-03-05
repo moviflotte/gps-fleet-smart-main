@@ -1,16 +1,21 @@
 // src/lib/api.ts - FIXED VERSION
 type Creds = { username: string; password: string };
 
-/* ===================== Session creds ===================== */
 function loadCreds(): Creds | null {
+  // 1) URL token (embedded mode)
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token');
+  if (token) return { username: '', password: token };
+
+  // 2) SessionStorage (LoginBar flow)  ← THIS WAS MISSING
   try {
-    const raw = sessionStorage.getItem("fleet_auth");
-    if (!raw) return null;
-    const p = JSON.parse(raw);
-    if (p?.isAuth && p?.username && p?.password) {
-      return { username: p.username, password: p.password };
+    const saved = sessionStorage.getItem('fleet_auth');
+    if (saved) {
+      const p = JSON.parse(saved);
+      if (p?.password) return { username: p.username ?? '', password: p.password };
     }
   } catch {}
+
   return null;
 }
 

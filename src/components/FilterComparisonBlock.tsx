@@ -15,15 +15,6 @@ import { fr } from "date-fns/locale"
 import { api } from "@/lib/api"
 import MultiSelect, { Option } from "@/components/MultiSelect"
 
-/* ---------------- Helpers ---------------- */
-function isLogged() {
-  try {
-    const raw = sessionStorage.getItem("fleet_auth")
-    if (!raw) return false
-    const p = JSON.parse(raw)
-    return !!(p?.isAuth && p?.username && p?.password)
-  } catch { return false }
-}
 function getGroupIdFromDevice(d: any): string | null {
   const gid = d?.groupId ?? d?.group_id ?? d?.group?.id ?? d?.attributes?.groupId ?? null
   return gid != null ? String(gid) : null
@@ -84,7 +75,7 @@ async function runPool<T>(jobs: (() => Promise<T>)[], concurrency = 6): Promise<
   return results
 }
 
-export function FilterComparisonBlock() {
+export function FilterComparisonBlock({ isLoggedIn = false }: { isLoggedIn?: boolean }) {
   /* Période */
   const { from: defFrom, to: defTo } = defaultRange()
   const [dateFrom, setDateFrom] = useState<Date | undefined>(defFrom)
@@ -106,22 +97,27 @@ export function FilterComparisonBlock() {
   const [tableLoading, setTableLoading] = useState(false)
   const [tableError, setTableError] = useState<string | null>(null)
 
-  /* Charger groupes + devices après login */
-  useEffect(() => {
-    if (!isLogged()) return
-    setListsLoading(true); setListsError(null)
-    ;(async () => {
-      try {
-        const [g, d] = await Promise.all([api.groups(), api.devices()])
-        setGroups(Array.isArray(g) ? g : [])
-        setDevices(Array.isArray(d) ? d : [])
-      } catch (e: any) {
-        setListsError(e?.message || "Impossible de charger groupes/véhicules")
-      } finally {
-        setListsLoading(false)
-      }
-    })()
-  }, [])
+
+
+useEffect(() => {
+  if (!isLoggedIn) {
+    setListsError("missing_credentials")
+    return
+  }
+  setListsLoading(true)
+  setListsError(null)
+  ;(async () => {
+    try {
+      const [g, d] = await Promise.all([api.groups(), api.devices()])
+      setGroups(Array.isArray(g) ? g : [])
+      setDevices(Array.isArray(d) ? d : [])
+    } catch (e: any) {
+      setListsError(e?.message || "Impossible de charger groupes/véhicules")
+    } finally {
+      setListsLoading(false)
+    }
+  })()
+}, [isLoggedIn])
 
   /* Options for MultiSelect */
   const groupOptions: Option[] = useMemo(
@@ -375,7 +371,7 @@ export function FilterComparisonBlock() {
               value={selectedGroupIds}
               onChange={setSelectedGroupIds}
               placeholder="Tous les groupes"
-              disabled={!isLogged() || listsLoading}
+              disabled={listsLoading}
             />
           </div>
 
@@ -387,18 +383,18 @@ export function FilterComparisonBlock() {
               value={selectedDeviceIds}
               onChange={setSelectedDeviceIds}
               placeholder="Tous les véhicules"
-              disabled={!isLogged() || listsLoading}
+              disabled={listsLoading}
             />
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-2 md:col-span-2">
             <Label>Période</Label>
             <div className="flex gap-2">
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full justify-start text-left text-xs">
-                    <CalendarIcon className="mr-1 h-3 w-3" />
-                    {dateFrom ? format(dateFrom, "dd/MM", { locale: fr }) : "Début"}
+                  <Button variant="outline" className="w-full justify-start text-left text-xs whitespace-nowrap">
+                    <CalendarIcon className="mr-1 h-3 w-3 shrink-0" />
+                    {dateFrom ? format(dateFrom, "dd/MM HH:mm", { locale: fr }) : "Début"}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0">
@@ -407,9 +403,9 @@ export function FilterComparisonBlock() {
               </Popover>
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full justify-start text-left text-xs">
-                    <CalendarIcon className="mr-1 h-3 w-3" />
-                    {dateTo ? format(dateTo, "dd/MM", { locale: fr }) : "Fin"}
+                  <Button variant="outline" className="w-full justify-start text-left text-xs whitespace-nowrap">
+                    <CalendarIcon className="mr-1 h-3 w-3 shrink-0" />
+                    {dateTo ? format(dateTo, "dd/MM HH:mm", { locale: fr }) : "Fin"}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0">
@@ -431,8 +427,9 @@ export function FilterComparisonBlock() {
           </div>
         </div>
 
-        {listsError && <div className="text-sm text-red-600">{listsError}</div>}
-        {tableError && <div className="text-sm text-red-600">{tableError}</div>}
+{listsError && listsError !== "missing_credentials" && (
+  <div className="text-sm text-red-600">{listsError}</div>
+)}        {tableError && <div className="text-sm text-red-600">{tableError}</div>}
 
         <Separator />
 
