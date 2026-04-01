@@ -483,17 +483,28 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
     const lists = await runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)]);
     for (const [id, arr0] of lists) {
       const arr = asArr(arr0).slice().sort((a, b) => (Date.parse(a?.serverTime) || 0) - (Date.parse(b?.serverTime) || 0));
-      const alertsSet = new Set();
+      const alertsMap = new Map(); // label -> latest serverTime
       const geosSet = new Set();
       let alertOccurrences = 0;
       let lastState = null;
       let lastTs = 0;
 
       for (const ev of arr) {
-        if (ev?.type && ev.type !== "alarm") { alertsSet.add(String(ev.type)); alertOccurrences += 1; }
-        if (ev?.type === "alarm" && ev?.attributes?.alarm) alertsSet.add(String(ev.attributes.alarm));
+        const evTime = ev?.serverTime || null;
+        if (ev?.type && ev.type !== "alarm") {
+          const lbl = String(ev.type);
+          if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime);
+          alertOccurrences += 1;
+        }
+        if (ev?.type === "alarm" && ev?.attributes?.alarm) {
+          const lbl = String(ev.attributes.alarm);
+          if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime);
+        }
         const ids = parseNotifIds(ev?.attributes?.notifications || ev?.attributes?.notificationId);
-        ids.forEach((nid) => alertsSet.add(notifMap.get(nid) || `notif:${nid}`));
+        ids.forEach((nid) => {
+          const lbl = notifMap.get(nid) || `notif:${nid}`;
+          if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime);
+        });
         if (ev?.type === "alarm") alertOccurrences += ids.length > 0 ? ids.length : 1;
         const gid = Number(ev?.geofenceId);
         if (Number.isFinite(gid) && gid > 0) geosSet.add(geofenceMap.get(gid) || `geofence:${gid}`);
@@ -504,9 +515,14 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
       }
       if (!lastState) lastState = arr.length ? "en_service" : "hors_service";
 
+      const alertEntries = Array.from(alertsMap.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([label, time]) => ({ label, time }));
+
       rows.push({
         deviceId: id,
-        alerts: Array.from(alertsSet).sort((a, b) => a.localeCompare(b)),
+        alerts: alertEntries.map(e => e.label),
+        alertTimes: Object.fromEntries(alertEntries.map(e => [e.label, e.time])),
         geofences: Array.from(geosSet).sort((a, b) => a.localeCompare(b)),
         alertCount: alertOccurrences,
         geofenceCount: geosSet.size,

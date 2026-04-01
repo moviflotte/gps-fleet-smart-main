@@ -248,18 +248,18 @@ export default function Alerts() {
       const rows: any[] = Array.isArray(data?.rows) ? data.rows : []
 
       // 3) synthèse cartes
-      const now = new Date()
-      const dateStr = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
-      const timeStr = now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
-
       const synthetic: Alert[] = []
       for (const r of rows) {
         const device = devById.get(Number(r.deviceId))
         const vehicleLabel = device?.name || device?.uniqueId || `Device #${r.deviceId}`
         const labels: string[] = Array.isArray(r?.alerts) ? r.alerts : []
+        const alertTimes: Record<string, string> = r?.alertTimes || {}
         labels.forEach((label: string) => {
           const type = labelToType(label)
           const stableId = `${r.deviceId}::${slug(label)}`
+          const eventDate = alertTimes[label] ? new Date(alertTimes[label]) : new Date()
+          const dateStr = eventDate.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
+          const timeStr = eventDate.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
           synthetic.push({
             id: stableId,
             type,
