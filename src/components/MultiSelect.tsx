@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { ChevronDown, Search } from "lucide-react"
 
@@ -79,7 +78,7 @@ export default function MultiSelect({
           </Button>
         </div>
 
-        <ScrollArea style={{ maxHeight }}>
+        <div className="overflow-y-auto" style={{ maxHeight }}>
           {filtered.length === 0 && (
             <div className="text-sm text-muted-foreground px-2 py-6 text-center">{emptyText}</div>
           )}
@@ -97,7 +96,7 @@ export default function MultiSelect({
               </li>
             ))}
           </ul>
-        </ScrollArea>
+        </div>
 
         <div className="flex justify-end gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => onChange([])}>Effacer</Button>
