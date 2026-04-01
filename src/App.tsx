@@ -8,6 +8,7 @@ import Alerts from "./pages/Alerts";
 import Dashboard from "./pages/Dashboard";
 import NotFound from "./pages/NotFound";
 import ResolvedAlerts from "./pages/ResolvedAlerts";
+import Reports from "@/pages/Reports";
 
 const queryClient = new QueryClient();
 
@@ -22,7 +23,7 @@ const App = () => (
             <Route path="/" element={<Dashboard />} />
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/resolved-alerts" element={<ResolvedAlerts />} />   {/* ✅ */}
-
+            <Route path="/reports" element={<Reports />} />   {/* ✅ */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Layout>

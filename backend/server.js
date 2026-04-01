@@ -948,6 +948,91 @@ app.post("/api/reports/maintenance-efficiency", async (req, res) => {
 
 
 /* =========================
+   Reports: trips list + per-vehicle summary
+========================= */
+app.post("/api/reports/trips-list", async (req, res) => {
+  const { username, password, deviceIds, from, to } = req.body || {};
+  const auth = makeBasicHeader(username, password);
+  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
+  if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
+  if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
+  try {
+    const devs = await getDevices(auth);
+    const nameById = new Map();
+    for (const d of devs) nameById.set(Number(d.id), d.name || String(d.id));
+
+    const tripsByDevice = await fetchTripsForDevices(auth, deviceIds, from, to);
+    const trips = [];
+    for (const [id, deviceTrips] of tripsByDevice) {
+      const name = nameById.get(Number(id)) || String(id);
+      for (const t of asArr(deviceTrips)) {
+        trips.push({
+          deviceId: id,
+          deviceName: t.deviceName || name,
+          startTime: t.startTime || null,
+          endTime: t.endTime || null,
+          startAddress: t.startAddress || null,
+          endAddress: t.endAddress || null,
+          distanceKm: Number(((t.distance || 0) / 1000).toFixed(2)),
+          durationMin: Math.round((t.duration || 0) / 60000),
+          avgSpeedKmh: Math.round((t.averageSpeed || 0) * 1.852),
+          maxSpeedKmh: Math.round((t.maxSpeed || 0) * 1.852),
+          spentFuel: Number((t.spentFuel || 0).toFixed(2)),
+        });
+      }
+    }
+    trips.sort((a, b) => ((b.startTime || "") > (a.startTime || "") ? 1 : -1));
+    res.json({ ok: true, trips, count: trips.length });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: "trips_list_failed", detail: e.message });
+  }
+});
+
+app.post("/api/reports/per-vehicle", async (req, res) => {
+  const { username, password, deviceIds, from, to } = req.body || {};
+  const auth = makeBasicHeader(username, password);
+  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
+  if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
+  if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
+  try {
+    const devs = await getDevices(auth);
+    const deviceMap = new Map();
+    for (const d of devs) deviceMap.set(Number(d.id), d);
+
+    const [summaryByDevice, tripsByDevice] = await Promise.all([
+      fetchSummaryForDevices(auth, deviceIds, from, to),
+      fetchTripsForDevices(auth, deviceIds, from, to),
+    ]);
+
+    const rows = deviceIds.map((id) => {
+      const dev = deviceMap.get(Number(id));
+      const name = dev?.name || String(id);
+      const summaries = asArr(summaryByDevice.get(id));
+      const trips = asArr(tripsByDevice.get(id));
+      let totalDistanceM = 0, totalFuel = 0;
+      for (const s of summaries) {
+        totalDistanceM += Number(s?.distance) || 0;
+        totalFuel += Number(s?.spentFuel) || 0;
+      }
+      const distanceKm = totalDistanceM / 1000;
+      const avgConsumption = distanceKm > 0 ? (totalFuel * 100) / distanceKm : 0;
+      return {
+        deviceId: id,
+        name,
+        distanceKm: Number(distanceKm.toFixed(1)),
+        totalFuel: Number(totalFuel.toFixed(2)),
+        avgConsumption: Number(avgConsumption.toFixed(1)),
+        tripCount: trips.length,
+      };
+    });
+
+    res.json({ ok: true, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: "per_vehicle_failed", detail: e.message });
+  }
+});
+
+/* =========================
    Static
 ========================= */
 app.get("/", (_req, res) => {

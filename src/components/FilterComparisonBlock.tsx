@@ -245,7 +245,7 @@ export function FilterComparisonBlock() {
             {!listsLoading && (groups.length > 0 || devices.length > 0) && (
               <Badge variant="outline">{groups.length} groupes · {devices.length} véhicules</Badge>
             )}
-            <Button variant="outline" size="sm" onClick={() => (window.location.href = "/reports")}>
+            <Button variant="outline" size="sm" onClick={() => (window.location.href = "/reports" + window.location.search)}>
               Rapports Détaillés
             </Button>
           </div>

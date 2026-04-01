@@ -93,6 +93,10 @@ export const api = {
     postJSON("/api/reports/maintenance-efficiency", { deviceIds, from, to }),
   vehicleAlerts: (deviceIds: number[], from: string, to: string) =>
     postJSON("/api/reports/vehicle-alerts", { deviceIds, from, to }),
+  tripsList: (deviceIds: number[], from: string, to: string) =>
+    postJSON("/api/reports/trips-list", { deviceIds, from, to }),
+  perVehicle: (deviceIds: number[], from: string, to: string) =>
+    postJSON("/api/reports/per-vehicle", { deviceIds, from, to }),
 
   /* =======================================================
    *  PERSISTENCE ALERTES — BACKED BY POSTGRES (DB)
