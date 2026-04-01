@@ -1,4 +1,6 @@
 // src/lib/api.ts
+const BASE_URL = 'https://hetzner.moviflotte.com'
+
 type Creds = { username: string; password: string };
 
 /* ===================== Session creds ===================== */
@@ -16,7 +18,7 @@ async function postJSON<T = any>(path: string, body: Record<string, any> = {}): 
   const creds = loadCreds();
   const merged = creds ? { ...body, ...creds } : body;
 
-  const res = await fetch(path, {
+  const res = await fetch(BASE_URL + path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(merged),
@@ -33,7 +35,7 @@ async function putJSON<T = any>(path: string, body: Record<string, any> = {}): P
   const creds = loadCreds();
   const merged = creds ? { ...body, ...creds } : body;
 
-  const res = await fetch(path, {
+  const res = await fetch(BASE_URL + path, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(merged),
@@ -48,7 +50,7 @@ async function putJSON<T = any>(path: string, body: Record<string, any> = {}): P
 
 /** GET avec query object */
 async function getJSON<T = any>(path: string, query: Record<string, any> = {}): Promise<T> {
-  const url = new URL(path, window.location.origin);
+  const url = new URL(BASE_URL + path, window.location.origin);
   Object.entries(query).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
   });
