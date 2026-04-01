@@ -37,10 +37,36 @@ const app = express();
 app.use(express.json());
 
 /* =========================
+   CORS
+========================= */
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map(o => o.trim())
+  .filter(Boolean);
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const allow =
+    ALLOWED_ORIGINS.length === 0 ||          // no restriction set → allow all
+    ALLOWED_ORIGINS.includes("*") ||
+    (origin && ALLOWED_ORIGINS.includes(origin));
+
+  if (allow) {
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
+
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
+/* =========================
    Request logger
 ========================= */
 app.use((req, _res, next) => {
-  console.log(`[→] ${req.method} ${req.path}`);
+  console.log(`[→] ${req.method} ${req.path} origin=${req.headers.origin || "-"}`);
   next();
 });
 
