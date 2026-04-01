@@ -89,7 +89,7 @@ const upstream = axios.create({
   httpAgent: new http.Agent({ keepAlive: true, maxSockets: 64 }),
   httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 64 }),
   decompress: true,
-  validateStatus: (s) => s >= 200 && s < 500,
+  validateStatus: () => true,   // never throw on HTTP status — each fetcher checks r.status
 });
 
 /* =========================
