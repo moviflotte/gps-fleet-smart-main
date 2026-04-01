@@ -43,19 +43,11 @@ function toIsoLocalValue(d: Date) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 function defaultRange() {
+  const from = new Date()
+  from.setHours(0, 0, 0, 0)
   const to = new Date()
-  const from = new Date(to.getTime() - 24 * 60 * 60 * 1000)
+  to.setHours(23, 59, 0, 0)
   return { from, to }
-}
-function readRangeFromStorage() {
-  const f = localStorage.getItem("kpiFrom")
-  const t = localStorage.getItem("kpiTo")
-  if (f && t) return { from: new Date(f), to: new Date(t) }
-  return defaultRange()
-}
-function saveRangeToStorage(from: Date, to: Date) {
-  localStorage.setItem("kpiFrom", from.toISOString())
-  localStorage.setItem("kpiTo", to.toISOString())
 }
 
 /* ---------- Types UI ---------- */
@@ -94,7 +86,7 @@ export default function Dashboard() {
   const toggleKpi = (key: keyof VisibleKpis) => setVisibleKpis(p => ({ ...p, [key]: !p[key] }))
 
   /* Période contrôlée par l’utilisateur */
-  const initial = readRangeFromStorage()
+  const initial = defaultRange()
   const [fromLocal, setFromLocal] = useState<string>(toIsoLocalValue(initial.from))
   const [toLocal, setToLocal] = useState<string>(toIsoLocalValue(initial.to))
   const [range, setRange] = useState<{ from: Date; to: Date }>(initial)
@@ -106,24 +98,24 @@ export default function Dashboard() {
     const t = new Date(toLocal)
     if (Number.isNaN(+f) || Number.isNaN(+t)) return setRangeError("Dates invalides")
     if (+f >= +t) return setRangeError("La date de début doit être avant la date de fin")
-    saveRangeToStorage(f, t)
     setRange({ from: f, to: t })
-    fetchAll(f, t) // recharge immédiat
+    fetchAll(f, t)
   }
-  const setLast24h = () => {
+  const setToday = () => {
     const { from, to } = defaultRange()
     setFromLocal(toIsoLocalValue(from))
     setToLocal(toIsoLocalValue(to))
-    saveRangeToStorage(from, to)
     setRange({ from, to })
     fetchAll(from, to)
   }
   const setLast7d = () => {
     const to = new Date()
-    const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000)
+    to.setHours(23, 59, 0, 0)
+    const from = new Date()
+    from.setDate(from.getDate() - 6)
+    from.setHours(0, 0, 0, 0)
     setFromLocal(toIsoLocalValue(from))
     setToLocal(toIsoLocalValue(to))
-    saveRangeToStorage(from, to)
     setRange({ from, to })
     fetchAll(from, to)
   }
@@ -327,7 +319,7 @@ export default function Dashboard() {
           <Button onClick={applyRange} className="flex items-center gap-2">
             <RefreshCw className="h-4 w-4" /> Appliquer
           </Button>
-          <Button variant="outline" onClick={setLast24h}>Dernières 24h</Button>
+          <Button variant="outline" onClick={setToday}>Aujourd'hui</Button>
           <Button variant="outline" onClick={setLast7d}>7 jours</Button>
 
           {rangeError && <span className="text-xs text-danger ml-1">{rangeError}</span>}

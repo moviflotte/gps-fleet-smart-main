@@ -4,14 +4,11 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
-import { Calendar } from "@/components/ui/calendar"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Input } from "@/components/ui/input"
 import {
-  Filter, BarChart3, Calendar as CalendarIcon, Truck, MapPin, Fuel, AlertTriangle,
+  Filter, BarChart3, Truck, MapPin, Fuel, AlertTriangle,
   Thermometer, Route, Settings, TrendingUp, TrendingDown, ArrowUpDown
 } from "lucide-react"
-import { format } from "date-fns"
-import { fr } from "date-fns/locale"
 import { api } from "@/lib/api"
 import MultiSelect, { Option } from "@/components/MultiSelect"
 
@@ -23,9 +20,15 @@ function getPlateFromDevice(d: any): string | null {
   return d?.attributes?.plate || d?.uniqueId || null
 }
 function defaultRange() {
+  const from = new Date()
+  from.setHours(0, 0, 0, 0)
   const to = new Date()
-  const from = new Date(to.getTime() - 24 * 60 * 60 * 1000)
+  to.setHours(23, 59, 0, 0)
   return { from, to }
+}
+function toIsoLocal(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 function toISO(d?: Date) {
   return (d ?? new Date()).toISOString()
@@ -66,8 +69,8 @@ async function runPool<T>(jobs: (() => Promise<T>)[], concurrency = 6): Promise<
 export function FilterComparisonBlock() {
   /* Période */
   const { from: defFrom, to: defTo } = defaultRange()
-  const [dateFrom, setDateFrom] = useState<Date | undefined>(defFrom)
-  const [dateTo, setDateTo] = useState<Date | undefined>(defTo)
+  const [dateFrom, setDateFrom] = useState<string>(toIsoLocal(defFrom))
+  const [dateTo, setDateTo] = useState<string>(toIsoLocal(defTo))
 
   /* Sélections */
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
@@ -134,8 +137,8 @@ export function FilterComparisonBlock() {
     setTableError(null)
     setTableLoading(true)
     try {
-      const fromISO = toISO(dateFrom)
-      const toISOv = toISO(dateTo)
+      const fromISO = toISO(dateFrom ? new Date(dateFrom) : undefined)
+      const toISOv = toISO(dateTo ? new Date(dateTo) : undefined)
 
       const deviceIds = Array.from(selectedDeviceSet).map((id) => Number(id)).filter(Number.isFinite)
 
@@ -277,28 +280,24 @@ export function FilterComparisonBlock() {
           <div className="space-y-2 md:col-span-2">
             <Label>Période</Label>
             <div className="flex gap-2">
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full justify-start text-left text-xs whitespace-nowrap">
-                    <CalendarIcon className="mr-1 h-3 w-3 shrink-0" />
-                    {dateFrom ? format(dateFrom, "dd/MM HH:mm", { locale: fr }) : "Début"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0">
-                  <Calendar mode="single" selected={dateFrom} onSelect={setDateFrom} locale={fr} />
-                </PopoverContent>
-              </Popover>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full justify-start text-left text-xs whitespace-nowrap">
-                    <CalendarIcon className="mr-1 h-3 w-3 shrink-0" />
-                    {dateTo ? format(dateTo, "dd/MM HH:mm", { locale: fr }) : "Fin"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0">
-                  <Calendar mode="single" selected={dateTo} onSelect={setDateTo} locale={fr} />
-                </PopoverContent>
-              </Popover>
+              <div className="flex-1 space-y-1">
+                <label className="text-xs text-muted-foreground">De</label>
+                <Input
+                  type="datetime-local"
+                  value={dateFrom}
+                  onChange={e => setDateFrom(e.target.value)}
+                  className="text-xs"
+                />
+              </div>
+              <div className="flex-1 space-y-1">
+                <label className="text-xs text-muted-foreground">À</label>
+                <Input
+                  type="datetime-local"
+                  value={dateTo}
+                  onChange={e => setDateTo(e.target.value)}
+                  className="text-xs"
+                />
+              </div>
             </div>
           </div>
 
