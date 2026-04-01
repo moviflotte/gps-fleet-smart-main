@@ -122,7 +122,7 @@ export default function Reports() {
 
   const groupRows = useMemo(() => {
     const groupNameById = new Map<string, string>()
-    for (const g of groups) groupNameById.set(String(g.id), g.name || `Groupe ${g.id}`)
+    for (const g of groups) groupNameById.set(String(g.id), g.name || g.id)
 
     const deviceById = new Map<number, any>()
     for (const d of devices) deviceById.set(Number(d.id), d)
@@ -133,7 +133,9 @@ export default function Reports() {
       const dev = deviceById.get(row.deviceId)
       const gid = dev ? getGroupId(dev) : null
       const key = gid ?? "none"
-      const groupName = gid ? (groupNameById.get(gid) ?? `Groupe ${gid}`) : "Sans groupe"
+      const groupName = gid
+        ? (groupNameById.get(gid) ?? dev?.group?.name ?? dev?.attributes?.groupName ?? gid)
+        : "Sans groupe"
       if (!byGroup.has(key)) byGroup.set(key, { name: groupName, vehicleCount: 0, distanceKm: 0, totalFuel: 0 })
       const g = byGroup.get(key)!
       g.vehicleCount++
