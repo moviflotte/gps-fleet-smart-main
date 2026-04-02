@@ -252,6 +252,7 @@ export default function Alerts() {
       for (const r of rows) {
         const device = devById.get(Number(r.deviceId))
         const vehicleLabel = device?.name || device?.uniqueId || `Device #${r.deviceId}`
+        const driverLabel = device?.contact || device?.attributes?.driver || device?.attributes?.conducteur || "—"
         const labels: string[] = Array.isArray(r?.alerts) ? r.alerts : []
         const alertTimes: Record<string, string> = r?.alertTimes || {}
         labels.forEach((label: string) => {
@@ -269,7 +270,7 @@ export default function Alerts() {
             date: dateStr,
             location: (Array.isArray(r?.geofences) && r.geofences[0]) || "—",
             vehicle: vehicleLabel,
-            driver: "—",
+            driver: driverLabel,
             status: "new",
             comments: [],
             actionPlan: [],

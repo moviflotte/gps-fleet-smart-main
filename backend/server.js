@@ -656,22 +656,30 @@ app.post("/api/db/alerts/state/patch", async (req, res) => {
 
       const status = patch.status || null;
       const type = patch.type || null;
+      const title = patch.title || null;
+      const vehicle = patch.vehicle || null;
+      const driver = patch.driver || null;
+      const location = patch.location || null;
       const takenBy = status === "in_progress" ? (username || null) : null;
       const takenAt = status === "in_progress" ? now : null;
 
       await client.query(
         `
-        INSERT INTO alerts.alert_states (company, alert_id, status, type, taken_by, taken_at, updated_at)
-        VALUES ($1,$2, COALESCE($3,'new'), COALESCE($4,'success'), $5, $6, now())
+        INSERT INTO alerts.alert_states (company, alert_id, status, type, title, vehicle, driver, location, taken_by, taken_at, updated_at)
+        VALUES ($1,$2, COALESCE($3,'new'), COALESCE($4,'success'), $5, $6, $7, $8, $9, $10, now())
         ON CONFLICT (company, alert_id)
         DO UPDATE SET
-          status     = COALESCE(EXCLUDED.status, alerts.alert_states.status),
-          type       = COALESCE(EXCLUDED.type,   alerts.alert_states.type),
+          status     = COALESCE(EXCLUDED.status,   alerts.alert_states.status),
+          type       = COALESCE(EXCLUDED.type,     alerts.alert_states.type),
+          title      = COALESCE(EXCLUDED.title,    alerts.alert_states.title),
+          vehicle    = COALESCE(EXCLUDED.vehicle,   alerts.alert_states.vehicle),
+          driver     = COALESCE(EXCLUDED.driver,    alerts.alert_states.driver),
+          location   = COALESCE(EXCLUDED.location,  alerts.alert_states.location),
           taken_by   = COALESCE(alerts.alert_states.taken_by, EXCLUDED.taken_by),
           taken_at   = COALESCE(alerts.alert_states.taken_at, EXCLUDED.taken_at),
           updated_at = now()
         `,
-        [company, alertId, status, type, takenBy, takenAt]
+        [company, alertId, status, type, title, vehicle, driver, location, takenBy, takenAt]
       );
 
       if (Array.isArray(patch.actionPlan)) {
@@ -745,7 +753,7 @@ app.post("/api/db/alerts/state/get", async (req, res) => {
 
   try {
     const st = await pg.query(
-      `SELECT company, alert_id, status, type, taken_by, taken_at, updated_at
+      `SELECT company, alert_id, status, type, title, vehicle, driver, location, taken_by, taken_at, updated_at
        FROM alerts.alert_states
        WHERE company=$1 AND ($2::text[] IS NULL OR alert_id = ANY($2))`,
       [company, list.length ? list : null]
@@ -772,6 +780,10 @@ app.post("/api/db/alerts/state/get", async (req, res) => {
       out[r.alert_id] = {
         status: r.status,
         type: r.type,
+        title: r.title || null,
+        vehicle: r.vehicle || null,
+        driver: r.driver || null,
+        location: r.location || null,
         takenBy: r.taken_by,
         takenAt: r.taken_at,
         updatedAt: r.updated_at,
