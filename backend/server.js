@@ -900,12 +900,13 @@ app.post("/api/db/alerts/done", async (req, res) => {
         `
         INSERT INTO alerts.alert_states
           (company, alert_id, status, type, taken_by, taken_at, updated_at)
-        VALUES ($1,$2,'resolved', COALESCE($3,'success'), $4, COALESCE($5, alerts.alert_states.taken_at), now())
+        VALUES ($1,$2,'resolved', COALESCE($3,'success'), $4, $5, now())
         ON CONFLICT (company, alert_id)
         DO UPDATE SET
           status     = 'resolved',
           type       = COALESCE($3, alerts.alert_states.type),
           taken_by   = COALESCE(alerts.alert_states.taken_by, $4),
+          taken_at   = COALESCE(alerts.alert_states.taken_at, EXCLUDED.taken_at),
           updated_at = now()
         `,
         [company, alertId, type, username, null]
