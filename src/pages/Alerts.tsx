@@ -465,7 +465,7 @@ export default function Alerts() {
     const originalType = alertObj?.type || "success"
 
     // 1) UI immédiate
-    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, status: "resolved" } : a)))
+    setAlerts((prev) => prev.filter((a) => a.id !== id))
     if (detailAlert?.id === id) setDetailAlert(null)
     if (editAlert?.id === id) setEditAlert(null)
 
