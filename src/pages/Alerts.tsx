@@ -207,8 +207,8 @@ export default function Alerts() {
   }, [])
 
   const company = useMemo(() => {
-    const creds = loadSessionCreds()
-    return creds?.username || companyFromUsername(creds?.username)
+    const params = new URLSearchParams(window.location.search)
+    return params.get("token") || "default"
   }, [])
 
   useEffect(() => {
@@ -301,7 +301,7 @@ export default function Alerts() {
         }
       }
 
-      setAlerts(synthetic)
+      setAlerts(synthetic.filter((a) => a.status !== "resolved"))
     } catch (e: any) {
       setLoadError(e?.message || "Erreur de chargement des alertes")
       setAlerts([])
@@ -354,7 +354,7 @@ export default function Alerts() {
       : {
           ...a,
           actionPlan: defaultPlans[a.type].map((label) => ({
-            id: crypto.randomUUID(),
+            id: (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36)),
             label,
             done: false,
           })),
@@ -371,7 +371,7 @@ export default function Alerts() {
               comments: [
                 ...a.comments,
                 {
-                  id: crypto.randomUUID(),
+                  id: (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36)),
                   text: "Alerte prise en charge",
                   author: creds?.username || "Admin",
                   date: new Date().toLocaleString(),
@@ -399,7 +399,7 @@ export default function Alerts() {
             comments: [
               ...patched.comments,
               {
-                id: crypto.randomUUID(),
+                id: (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36)),
                 text: "Alerte prise en charge",
                 author: creds?.username || "Admin",
                 date: new Date().toLocaleString(),
@@ -449,7 +449,7 @@ export default function Alerts() {
           return a
         }
         setActionError(null)
-        next = { ...a, actionPlan: [...a.actionPlan, { id: crypto.randomUUID(), label: trimmed, done: false }] }
+        next = { ...a, actionPlan: [...a.actionPlan, { id: (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36)), label: trimmed, done: false }] }
         return next!
       })
     )
@@ -516,7 +516,7 @@ export default function Alerts() {
                 ...a,
                 comments: [
                   ...a.comments,
-                  { id: crypto.randomUUID(), text: comments, author: "Admin", date: new Date().toLocaleString() },
+                  { id: (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36)), text: comments, author: "Admin", date: new Date().toLocaleString() },
                 ],
               })
             : a
@@ -551,7 +551,10 @@ export default function Alerts() {
     variant="default"
     size="sm"
     className="bg-green-600 hover:bg-green-700 text-white flex items-center gap-2"
-    onClick={() => navigate("/resolved-alerts")}
+    onClick={() => {
+      const token = new URLSearchParams(window.location.search).get("token") || sessionStorage.getItem("fleet_token") || "";
+      navigate(token ? `/resolved-alerts?token=${encodeURIComponent(token)}` : "/resolved-alerts");
+    }}
   >
     <CheckCircle className="h-4 w-4" />
     Alertes traitées

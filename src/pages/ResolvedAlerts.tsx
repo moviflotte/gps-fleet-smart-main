@@ -100,10 +100,10 @@ export default function ResolvedAlerts() {
   const [active, setActive] = useState<ResolvedAlert | null>(null);
   const [note, setNote] = useState("");
 
-  /* Company courante */
+  /* Company courante (= token utilisateur) */
   const company = useMemo(() => {
-    const creds = loadSessionCreds();
-    return creds?.username || companyFromUsername(creds?.username);
+    const params = new URLSearchParams(window.location.search);
+    return params.get("token") || "default";
   }, []);
 
   /* Chargement initial */
