@@ -103,7 +103,7 @@ export default function ResolvedAlerts() {
   /* Company courante */
   const company = useMemo(() => {
     const creds = loadSessionCreds();
-    return companyFromUsername(creds?.username);
+    return creds?.username || companyFromUsername(creds?.username);
   }, []);
 
   /* Chargement initial */

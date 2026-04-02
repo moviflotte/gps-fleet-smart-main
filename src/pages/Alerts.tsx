@@ -208,7 +208,7 @@ export default function Alerts() {
 
   const company = useMemo(() => {
     const creds = loadSessionCreds()
-    return companyFromUsername(creds?.username)
+    return creds?.username || companyFromUsername(creds?.username)
   }, [])
 
   useEffect(() => {
