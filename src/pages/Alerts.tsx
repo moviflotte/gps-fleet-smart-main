@@ -389,6 +389,11 @@ export default function Alerts() {
           id,
           patch: {
             status: "in_progress",
+            type: a.type,
+            title: a.title,
+            vehicle: a.vehicle,
+            driver: a.driver,
+            location: a.location,
             actionPlan: patched.actionPlan,
             comments: [
               ...patched.comments,
@@ -455,14 +460,29 @@ export default function Alerts() {
   }
 
   const markResolved = async (id: string) => {
+    const alertObj = alerts.find((a) => a.id === id)
+    const originalType = alertObj?.type || "success"
+
     // 1) UI immédiate
-    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, status: "resolved", type: "success" } : a)))
+    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, status: "resolved" } : a)))
     if (detailAlert?.id === id) setDetailAlert(null)
     if (editAlert?.id === id) setEditAlert(null)
 
-    // 2) Persistance existante (patch) — on la garde pour commentaires/plan
+    // 2) Persistance existante (patch) — on la garde pour commentaires/plan + détails
     try {
-      await patchPersistedStates(company, [{ id, patch: { status: "resolved", type: "success" } }])
+      await patchPersistedStates(company, [
+        {
+          id,
+          patch: {
+            status: "resolved",
+            type: originalType,
+            title: alertObj?.title,
+            vehicle: alertObj?.vehicle,
+            driver: alertObj?.driver,
+            location: alertObj?.location,
+          },
+        },
+      ])
     } catch (e) {
       console.warn("persist markResolved (patch) failed:", (e as any)?.message)
     }
@@ -470,7 +490,7 @@ export default function Alerts() {
     // 3) **AJOUT CRUCIAL** : écrire aussi le statut 'done' pour la page "Alertes traitées"
     try {
       const creds = loadSessionCreds()
-      await api.alertsDonePost(company, creds?.username || null, [id], "success")
+      await api.alertsDonePost(company, creds?.username || null, [id], originalType)
     } catch (e) {
       console.warn("persist markResolved (done) failed:", (e as any)?.message)
     }

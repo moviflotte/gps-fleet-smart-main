@@ -7,8 +7,12 @@ type Creds = { username: string; password: string };
 function loadCreds(): Creds | null {
   const params = new URLSearchParams(window.location.search);
   const token = params.get('token');
+  if (token) {
+    sessionStorage.setItem('fleet_token', token);
+  }
+  const saved = token || sessionStorage.getItem('fleet_token') || '';
   return  {
-      password: token || '',
+      password: saved,
       username: ''
   }
 }
