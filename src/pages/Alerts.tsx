@@ -821,7 +821,7 @@ export default function Alerts() {
 
       {/* MODAL DÉTAILS */}
       <Dialog open={!!detailAlert} onOpenChange={() => setDetailAlert(null)}>
-        <DialogContent className="max-w-lg bg-white border shadow-xl z-50">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto bg-white border shadow-xl z-50">
           <DialogHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
@@ -947,7 +947,7 @@ export default function Alerts() {
 
       {/* MODAL MODIFIER L'ACTION */}
       <Dialog open={!!editAlert} onOpenChange={() => setEditAlert(null)}>
-        <DialogContent className="max-w-lg bg-white border shadow-xl z-50">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto bg-white border shadow-xl z-50">
           <DialogHeader>
             <DialogTitle>Dépassement de vitesse</DialogTitle>
             <p className="text-sm text-gray-600">Actions du gestionnaire</p>
