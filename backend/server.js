@@ -85,7 +85,6 @@ const ADMIN_PASS = process.env.ADMIN_PASS || "";
 ========================= */
 const upstream = axios.create({
   baseURL: BASE,
-  timeout: 30000,
   httpAgent: new http.Agent({ keepAlive: true, maxSockets: 64 }),
   httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 64 }),
   decompress: true,
