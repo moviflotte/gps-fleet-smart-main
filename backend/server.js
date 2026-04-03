@@ -172,7 +172,7 @@ const CONCURRENCY = Number(process.env.UPSTREAM_CONCURRENCY || 30);
 async function getDevices(auth) {
   const key = cacheKey("devices", auth);
   return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/devices", { headers: { Cookie: auth }, params: { all: true } });
+    const r = await upstream.get("/devices", { headers: { Cookie: auth } });
     if (r.status >= 400) throw new Error(`devices ${r.status}`);
     return asArr(r.data);
   });
@@ -261,7 +261,6 @@ app.post("/api/devices", async (req, res) => {
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   try {
     const data = await getDevices(auth);
-    console.log(`[devices] returned ${data.length} devices`);
     res.json(data);
   } catch (e) {
     console.error(`[devices] error:`, e.message);
@@ -275,7 +274,6 @@ app.post("/api/groups", async (req, res) => {
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   try {
     const data = await getGroups(auth);
-    console.log(`[groups] returned ${data.length} groups`);
     res.json(data);
   } catch (e) {
     console.error(`[groups] error:`, e.message);
@@ -334,7 +332,6 @@ async function fetchSummaryForDevices(auth, deviceIds, from, to) {
 
 app.post("/api/reports/average-speed", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  console.log(`[average-speed] devices=${deviceIds?.length} from=${from} to=${to}`);
   const auth = makeBasicHeader(username, password);
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
@@ -351,7 +348,6 @@ app.post("/api/reports/average-speed", async (req, res) => {
     const values = allTrips.map(item => Math.round(item.averageSpeed * 1.85200) * (item.distance/1000));
     const totalKms = allTrips.reduce((a, b) => a + (b.distance/1000), 0);
     const averageSpeed = totalKms > 0 ? Math.round((values.reduce((a, b) => a + b, 0)) / totalKms) : 0;
-    console.log(`[average-speed] trips=${allTrips.length} avgSpeed=${averageSpeed} km/h`);
     res.json({ ok: true, averageSpeed, summaryCount: allTrips.length, devicesCountUsed: used.size });
   } catch (e) {
     console.error(`[average-speed] error:`, e.message);
@@ -361,7 +357,6 @@ app.post("/api/reports/average-speed", async (req, res) => {
 
 app.post("/api/reports/max-speed", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  console.log(`[max-speed] devices=${deviceIds?.length} from=${from} to=${to}`);
   const auth = makeBasicHeader(username, password);
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
@@ -388,7 +383,6 @@ app.post("/api/reports/max-speed", async (req, res) => {
         }
       }
     }
-    console.log(`[max-speed] maxSpeed=${(maxSpeed*1.852).toFixed(1)} km/h trips=${tripsCount}`);
     res.json({ ok: true, maxSpeed: maxSpeed*1.852, tripsCount, devicesCountUsed: used.size, meta });
   } catch (e) {
     console.error(`[max-speed] error:`, e.message);
@@ -398,7 +392,6 @@ app.post("/api/reports/max-speed", async (req, res) => {
 
 app.post("/api/reports/avg-fuel", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  console.log(`[avg-fuel] devices=${deviceIds?.length} from=${from} to=${to}`);
   const auth = makeBasicHeader(username, password);
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
@@ -427,7 +420,6 @@ app.post("/api/reports/avg-fuel", async (req, res) => {
     // Calculate L/100km: (totalFuel * 100) / (totalDistance / 1000)
     const distanceKm = totalDistance / 1000;
     const avgConsumption = distanceKm > 0 ? (totalFuel * 100) / distanceKm : 0;
-    console.log(`[avg-fuel] totalFuel=${totalFuel.toFixed(2)}L distanceKm=${distanceKm.toFixed(1)} avgConsumption=${avgConsumption.toFixed(2)} L/100km`);
     res.json({ ok: true, avgConsumption, totalFuel, totalDistanceKm: distanceKm, summaryCount, devicesCountUsed: used.size });
   } catch (e) {
     console.error(`[avg-fuel] error:`, e.message);
@@ -437,7 +429,6 @@ app.post("/api/reports/avg-fuel", async (req, res) => {
 
 app.post("/api/reports/active-devices", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  console.log(`[active-devices] devices=${deviceIds?.length} from=${from} to=${to}`);
   const auth = makeBasicHeader(username, password);
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
@@ -447,7 +438,6 @@ app.post("/api/reports/active-devices", async (req, res) => {
     const tripsByDevice = await fetchTripsForDevices(auth, deviceIds, from, to);
     const activeSet = new Set();
     for (const [id, trips] of tripsByDevice) if (trips.length > 0) activeSet.add(id);
-    console.log(`[active-devices] active=${activeSet.size}/${deviceIds.length}`);
     res.json({ ok: true, activeDeviceIds: Array.from(activeSet), count: activeSet.size });
   } catch (e) {
     console.error(`[active-devices] error:`, e.message);
@@ -460,7 +450,6 @@ app.post("/api/reports/active-devices", async (req, res) => {
 ========================= */
 app.post("/api/reports/vehicle-alerts", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  console.log(`[vehicle-alerts] devices=${deviceIds?.length} from=${from} to=${to}`);
   const auth = makeBasicHeader(username, password);
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
@@ -553,7 +542,6 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
     }
 
     const totalAlerts = rows.reduce((s, r) => s + r.alertCount, 0);
-    console.log(`[vehicle-alerts] devices=${rows.length} totalAlerts=${totalAlerts}`);
     res.json({ ok: true, rows, count: rows.length });
   } catch (e) {
     console.error(`[vehicle-alerts] error:`, e.message);
@@ -1022,7 +1010,6 @@ app.get("/api/db/alerts/done", async (req, res) => {
 });
 app.post("/api/reports/total-distance", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  console.log(`[total-distance] devices=${deviceIds?.length} from=${from} to=${to}`);
   const auth = makeBasicHeader(username, password);
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
@@ -1043,7 +1030,6 @@ app.post("/api/reports/total-distance", async (req, res) => {
       }
     }
     const totalKm = totalDistance / 1000;
-    console.log(`[total-distance] totalKm=${totalKm.toFixed(1)} summaries=${summaryCount}`);
     res.json({ ok: true, totalKm: Math.max(0, totalKm), summaryCount, devicesCountUsed: used.size });
   } catch (e) {
     console.error(`[total-distance] error:`, e.message);
@@ -1052,7 +1038,6 @@ app.post("/api/reports/total-distance", async (req, res) => {
 });
 app.post("/api/reports/maintenance-efficiency", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  console.log(`[maintenance-efficiency] devices=${deviceIds?.length}`);
   const auth = makeBasicHeader(username, password);
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
@@ -1071,7 +1056,6 @@ app.post("/api/reports/maintenance-efficiency", async (req, res) => {
     }
 
     const efficiency = total > 0 ? (ok / total) * 100 : 0;
-    console.log(`[maintenance-efficiency] efficiency=${efficiency.toFixed(1)}% ok=${ok}/${total}`);
     res.json({ ok: true, efficiency, total });
   } catch (e) {
     console.error(`[maintenance-efficiency] error:`, e.message);
@@ -1085,7 +1069,6 @@ app.post("/api/reports/maintenance-efficiency", async (req, res) => {
 ========================= */
 app.post("/api/reports/trips-list", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  console.log(`[trips-list] devices=${deviceIds?.length} from=${from} to=${to}`);
   const auth = makeBasicHeader(username, password);
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
@@ -1116,7 +1099,6 @@ app.post("/api/reports/trips-list", async (req, res) => {
       }
     }
     trips.sort((a, b) => ((b.startTime || "") > (a.startTime || "") ? 1 : -1));
-    console.log(`[trips-list] returned ${trips.length} trips`);
     res.json({ ok: true, trips, count: trips.length });
   } catch (e) {
     console.error(`[trips-list] error:`, e.message);
@@ -1126,7 +1108,6 @@ app.post("/api/reports/trips-list", async (req, res) => {
 
 app.post("/api/reports/per-vehicle", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
-  console.log(`[per-vehicle] devices=${deviceIds?.length} from=${from} to=${to}`);
   const auth = makeBasicHeader(username, password);
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
@@ -1163,7 +1144,6 @@ app.post("/api/reports/per-vehicle", async (req, res) => {
       };
     });
 
-    console.log(`[per-vehicle] returned ${rows.length} rows`);
     res.json({ ok: true, rows });
   } catch (e) {
     console.error(`[per-vehicle] error:`, e.message);
