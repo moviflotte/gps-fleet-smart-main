@@ -64,12 +64,9 @@ app.use((req, res, next) => {
 });
 
 /* =========================
-   Request logger
+   Request logger (errors only)
 ========================= */
-app.use((req, _res, next) => {
-  console.log(`[→] ${req.method} ${req.path} origin=${req.headers.origin || "-"}`);
-  next();
-});
+app.use((req, _res, next) => { next(); });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -95,19 +92,10 @@ const upstream = axios.create({
 /* =========================
    Upstream interceptors
 ========================= */
-upstream.interceptors.request.use((config) => {
-  const params = config.params ? " " + JSON.stringify(config.params) : "";
-  console.log(`  [upstream →] ${config.method?.toUpperCase()} ${config.baseURL}${config.url}${params}`);
-  return config;
-});
 upstream.interceptors.response.use(
-  (res) => {
-    const len = Array.isArray(res.data) ? `${res.data.length} items` : typeof res.data === "object" ? "object" : String(res.data).slice(0, 40);
-    console.log(`  [upstream ←] ${res.status} ${res.config.url} — ${len}`);
-    return res;
-  },
+  (res) => res,
   (err) => {
-    console.error(`  [upstream ✗] ${err.config?.url} — ${err.message}`);
+    console.error(`[upstream ✗] ${err.config?.url} — ${err.message}`);
     return Promise.reject(err);
   }
 );
@@ -251,18 +239,15 @@ async function getMaint(auth, deviceId) {
 ========================= */
 app.post("/api/login", async (req, res) => {
   const { username, password } = req.body || {};
-  console.log(`[login] user="${username}"`);
   const auth = makeBasicHeader(username, password);
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   try {
     const r = await upstream.get(TEST_PATH, { headers: { Cookie: auth }, params: { all: true } });
     if (r.status >= 400) {
       const status = r.status;
-      console.warn(`[login] upstream rejected — ${status}`);
       if (status === 401 || status === 403) return res.status(status).json({ ok: false, error: "invalid_credentials", status });
       return res.status(status).json({ ok: false, error: "upstream_error", status, detail: r.data });
     }
-    console.log(`[login] OK`);
     res.json({ ok: true, status: r.status });
   } catch (e) {
     console.error(`[login] error:`, e.message);
@@ -309,12 +294,15 @@ async function fetchAllInOne(auth, deviceIds, from, to, types) {
     for (const t of types) params.append("type", t);
     params.append("from", from);
     params.append("to", to);
-    console.log(`  [allinone →] types=${types.join(",")} devices=${deviceIds.length}`);
-    const r = await upstream.get("/reports/allinone?" + params.toString(), {
+    const url = "/reports/allinone?" + params.toString();
+    const r = await upstream.get(url, {
       headers: { Cookie: auth },
       maxRedirects: 5,
     });
-    if (r.status >= 400) throw new Error(`allinone ${r.status}`);
+    if (r.status >= 400) {
+      const body = typeof r.data === 'string' ? r.data.slice(0, 300) : JSON.stringify(r.data).slice(0, 300);
+      throw new Error(`allinone ${r.status}: ${body}`);
+    }
     return r.data; // { trips: [...], summary: [...], route: [...], stops: [...] }
   });
 }
