@@ -7,6 +7,7 @@ import express from "express";
 import axios from "axios";
 import http from "http";
 import https from "https";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import pkg from "pg";
@@ -175,7 +176,7 @@ async function runPool(items, limit, worker) {
   await Promise.all(runners);
   return results;
 }
-const CONCURRENCY = Number(process.env.UPSTREAM_CONCURRENCY || 10);
+const CONCURRENCY = Number(process.env.UPSTREAM_CONCURRENCY || 50);
 
 /* =========================
    Shared fetchers PinMe
@@ -481,8 +482,8 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
     const rows = [];
     const lists = await runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)]);
     for (const [id, arr0] of lists) {
-      const arr = asArr(arr0).slice().sort((a, b) => (Date.parse(a?.serverTime) || 0) - (Date.parse(b?.serverTime) || 0));
-      const alertsMap = new Map(); // label -> latest serverTime
+      const arr = arr0.slice().sort((a, b) => (Date.parse(a?.serverTime) || 0) - (Date.parse(b?.serverTime) || 0));
+      const alertsMap = new Map();
       const geosSet = new Set();
       let alertOccurrences = 0;
       let lastState = null;
@@ -1158,8 +1159,21 @@ app.get("/", (_req, res) => {
 app.use(express.static(path.join(__dirname, "public")));
 
 /* =========================
-   Start
+   Start (HTTP + optional HTTPS)
 ========================= */
+const SSL_CERT = process.env.SSL_CERT || "/etc/letsencrypt/live/hetzner.moviflotte.com/fullchain.pem";
+const SSL_KEY = process.env.SSL_KEY || "/etc/letsencrypt/live/hetzner.moviflotte.com/privkey.pem";
+
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`HTTP server running on http://localhost:${PORT}`);
 });
+
+if (fs.existsSync(SSL_CERT) && fs.existsSync(SSL_KEY)) {
+  const HTTPS_PORT = Number(process.env.HTTPS_PORT || 443);
+  https.createServer({
+    cert: fs.readFileSync(SSL_CERT),
+    key: fs.readFileSync(SSL_KEY),
+  }, app).listen(HTTPS_PORT, () => {
+    console.log(`HTTPS server running on https://localhost:${HTTPS_PORT}`);
+  });
+}
