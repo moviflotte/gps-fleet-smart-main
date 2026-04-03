@@ -86,8 +86,8 @@ const ADMIN_PASS = process.env.ADMIN_PASS || "";
 ========================= */
 const upstream = axios.create({
   baseURL: BASE,
-  httpAgent: new http.Agent({ keepAlive: true, maxSockets: 256 }),
-  httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 256 }),
+  httpAgent: new http.Agent({ keepAlive: true, maxSockets: 64 }),
+  httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 64 }),
   decompress: true,
   validateStatus: () => true,   // never throw on HTTP status — each fetcher checks r.status
 });
@@ -176,7 +176,7 @@ async function runPool(items, limit, worker) {
   await Promise.all(runners);
   return results;
 }
-const CONCURRENCY = Number(process.env.UPSTREAM_CONCURRENCY || 200);
+const CONCURRENCY = Number(process.env.UPSTREAM_CONCURRENCY || 30);
 
 /* =========================
    Shared fetchers PinMe
