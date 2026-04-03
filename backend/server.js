@@ -299,16 +299,49 @@ app.post("/api/groups", async (req, res) => {
 });
 
 /* =========================
+   AllInOne bulk fetcher
+========================= */
+async function fetchAllInOne(auth, deviceIds, from, to, types) {
+  const key = cacheKey("allinone", auth, from, to, ...types);
+  return memo(key, DEFAULT_TTL.trips, async () => {
+    const params = new URLSearchParams();
+    for (const id of deviceIds) params.append("deviceId", String(id));
+    for (const t of types) params.append("type", t);
+    params.append("from", from);
+    params.append("to", to);
+    console.log(`  [allinone →] types=${types.join(",")} devices=${deviceIds.length}`);
+    const r = await upstream.get("/reports/allinone?" + params.toString(), {
+      headers: { Cookie: auth },
+      maxRedirects: 5,
+    });
+    if (r.status >= 400) throw new Error(`allinone ${r.status}`);
+    return r.data; // { trips: [...], summary: [...], route: [...], stops: [...] }
+  });
+}
+
+/* =========================
    KPIs endpoints (résumé)
 ========================= */
 async function fetchTripsForDevices(auth, deviceIds, from, to) {
-  const entries = await runPool(deviceIds, CONCURRENCY, async (id) => [id, await getTrips(auth, id, from, to)]);
-  return new Map(entries);
+  const data = await fetchAllInOne(auth, deviceIds, from, to, ["trips"]);
+  const map = new Map();
+  for (const t of asArr(data?.trips)) {
+    const did = Number(t?.deviceId);
+    if (!map.has(did)) map.set(did, []);
+    map.get(did).push(t);
+  }
+  return map;
 }
 
 async function fetchSummaryForDevices(auth, deviceIds, from, to) {
-  const entries = await runPool(deviceIds, CONCURRENCY, async (id) => [id, await getSummary(auth, id, from, to)]);
-  return new Map(entries);
+  const data = await fetchAllInOne(auth, deviceIds, from, to, ["summary"]);
+  const map = new Map();
+  for (const s of asArr(data?.summary)) {
+    const did = Number(s?.deviceId);
+    if (!map.has(did)) map.set(did, []);
+    map.get(did).push(s);
+  }
+  return map;
 }
 
 app.post("/api/reports/average-speed", async (req, res) => {
