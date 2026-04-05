@@ -272,7 +272,15 @@ export default function Dashboard() {
       setFuelBars(bars)
       setLoadTime(`${((performance.now() - t0) / 1000).toFixed(1)}s`)
     } catch (e: any) {
-      setErrorKPIs(e?.message || "Erreur de chargement")
+      const msg = e?.message || "Erreur inconnue"
+      const detail = msg.includes("fetch") || msg.includes("network") || msg.includes("Failed")
+        ? `Impossible de contacter le serveur: ${msg}`
+        : msg.includes("credentials") || msg.includes("401") || msg.includes("403")
+        ? `Authentification échouée: ${msg}`
+        : msg.includes("no_devices") || msg.includes("Aucun")
+        ? msg
+        : `Erreur de chargement: ${msg}`
+      setErrorKPIs(detail)
     } finally {
       setLoadingKPIs(false)
     }
@@ -348,6 +356,12 @@ export default function Dashboard() {
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           <span>Chargement des données…</span>
+        </div>
+      ) : errorKPIs ? (
+        <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 dark:bg-red-950/30 rounded-md px-3 py-2">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>{errorKPIs}</span>
+          <Button variant="outline" size="sm" className="ml-auto" onClick={() => fetchAll()}>Réessayer</Button>
         </div>
       ) : loadTime ? (
         <div className="text-xs text-muted-foreground">Chargé en {loadTime}</div>
@@ -445,7 +459,6 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {errorKPIs && <div className="text-sm text-red-600">{errorKPIs}</div>}
     </div>
   )
 }

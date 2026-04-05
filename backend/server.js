@@ -271,15 +271,19 @@ app.post("/api/reports/dashboard", async (req, res) => {
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
 
   try {
+    const t0 = Date.now();
+    const timed = (label, promise) => promise.then(r => { console.log(`[dashboard] ${label} done in ${Date.now() - t0}ms`); return r; });
+
     // Fetch all upstream data in parallel: trips+summary (one allinone call),
     // events (per device), maintenance (per device), notifications, geofences
     const [tripsAndSummary, eventLists, maintLists, notifs, geofences] = await Promise.all([
-      fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary"]),
-      runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)]),
-      runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)]),
-      getNotifications(auth),
-      getGeofences(auth),
+      timed("allinone(trips+summary)", fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary"])),
+      timed(`events(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)])),
+      timed(`maint(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)])),
+      timed("notifications", getNotifications(auth)),
+      timed("geofences", getGeofences(auth)),
     ]);
+    console.log(`[dashboard] all fetches done in ${Date.now() - t0}ms`);
 
     const tripsByDevice = groupBy(tripsAndSummary?.trips, "deviceId");
     const summaryByDevice = groupBy(tripsAndSummary?.summary, "deviceId");
@@ -397,6 +401,8 @@ app.post("/api/reports/dashboard", async (req, res) => {
       const alertEntries = Array.from(alertsMap.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([label, time]) => ({ label, time }));
       alertRows.push({ deviceId: id, alerts: alertEntries.map(e => e.label), alertTimes: Object.fromEntries(alertEntries.map(e => [e.label, e.time])), geofences: Array.from(geosSet).sort((a, b) => a.localeCompare(b)), alertCount: alertOccurrences, geofenceCount: geosSet.size, state: lastState, stateLabel: stateLabel(lastState) });
     }
+
+    console.log(`[dashboard] compute done in ${Date.now() - t0}ms | ${deviceIds.length} devices`);
 
     res.json({
       ok: true,
