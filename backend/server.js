@@ -120,37 +120,8 @@ function companyFromUsername(u = "") {
 }
 
 /* =========================
-   Tiny cache + pool concur.
+   Pool concurrency
 ========================= */
-const cache = new Map();
-const DEFAULT_TTL = {
-  trips: 60_000,
-  events: 45_000,
-  maint: 120_000,
-  meta: 5 * 60_000,
-};
-const cacheKey = (...parts) => parts.join("|");
-async function memo(key, ttl, fetcher) {
-  const now = Date.now();
-  const hit = cache.get(key);
-  if (hit && hit.value && hit.expire > now) return hit.value;
-  if (hit && typeof hit.then === "function") return hit;
-
-  const p = (async () => {
-    try {
-      const value = await fetcher();
-      cache.set(key, { value, expire: now + ttl });
-      return value;
-    } finally {
-      const entry = cache.get(key);
-      if (entry && typeof entry.then === "function") cache.delete(key);
-    }
-  })();
-
-  cache.set(key, p);
-  return p;
-}
-
 async function runPool(items, limit, worker) {
   const results = new Array(items.length);
   let i = 0;
@@ -170,68 +141,34 @@ const CONCURRENCY = Number(process.env.UPSTREAM_CONCURRENCY || 30);
    Shared fetchers PinMe
 ========================= */
 async function getDevices(auth) {
-  const key = cacheKey("devices", auth);
-  return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/devices", { headers: { Cookie: auth } });
-    if (r.status >= 400) throw new Error(`devices ${r.status}`);
-    return asArr(r.data);
-  });
+  const r = await upstream.get("/devices", { headers: { Cookie: auth } });
+  if (r.status >= 400) throw new Error(`devices ${r.status}`);
+  return asArr(r.data);
 }
 async function getGroups(auth) {
-  const key = cacheKey("groups", auth);
-  return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/groups", { headers: { Cookie: auth }, params: { all: true } });
-    if (r.status >= 400) throw new Error(`groups ${r.status}`);
-    return asArr(r.data);
-  });
+  const r = await upstream.get("/groups", { headers: { Cookie: auth }, params: { all: true } });
+  if (r.status >= 400) throw new Error(`groups ${r.status}`);
+  return asArr(r.data);
 }
 async function getNotifications(auth) {
-  const key = cacheKey("notifications", auth);
-  return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/notifications", { headers: { Cookie: auth }, params: { all: true } });
-    if (r.status >= 400) return [];
-    return asArr(r.data);
-  });
+  const r = await upstream.get("/notifications", { headers: { Cookie: auth }, params: { all: true } });
+  if (r.status >= 400) return [];
+  return asArr(r.data);
 }
 async function getGeofences(auth) {
-  const key = cacheKey("geofences", auth);
-  return memo(key, DEFAULT_TTL.meta, async () => {
-    const r = await upstream.get("/geofences", { headers: { Cookie: auth }, params: { all: true } });
-    if (r.status >= 400) return [];
-    return asArr(r.data);
-  });
-}
-async function getTrips(auth, deviceId, from, to) {
-  const key = cacheKey("trips", auth, deviceId, from, to);
-  return memo(key, DEFAULT_TTL.trips, async () => {
-    const r = await upstream.get("/reports/trips", { headers: { Cookie: auth }, params: { deviceId, from, to } });
-    if (r.status >= 400) return [];
-    return asArr(r.data);
-  });
-}
-async function getSummary(auth, deviceId, from, to) {
-  const key = cacheKey("summary", auth, deviceId, from, to);
-  return memo(key, DEFAULT_TTL.trips, async () => {
-    const r = await upstream.get("/reports/summary", { headers: { Cookie: auth }, params: { deviceId, from, to } });
-    if (r.status >= 400) return [];
-    return asArr(r.data);
-  });
+  const r = await upstream.get("/geofences", { headers: { Cookie: auth }, params: { all: true } });
+  if (r.status >= 400) return [];
+  return asArr(r.data);
 }
 async function getEvents(auth, deviceId, from, to) {
-  const key = cacheKey("events", auth, deviceId, from, to);
-  return memo(key, DEFAULT_TTL.events, async () => {
-    const r = await upstream.get("/reports/events", { headers: { Cookie: auth }, params: { deviceId, from, to } });
-    if (r.status >= 400) return [];
-    return asArr(r.data);
-  });
+  const r = await upstream.get("/reports/events", { headers: { Cookie: auth }, params: { deviceId, from, to } });
+  if (r.status >= 400) return [];
+  return asArr(r.data);
 }
 async function getMaint(auth, deviceId) {
-  const key = cacheKey("maint", auth, deviceId);
-  return memo(key, DEFAULT_TTL.maint, async () => {
-    const r = await upstream.get("/maintenance", { headers: { Cookie: auth }, params: { deviceId } });
-    if (r.status >= 400) return [];
-    return asArr(r.data);
-  });
+  const r = await upstream.get("/maintenance", { headers: { Cookie: auth }, params: { deviceId } });
+  if (r.status >= 400) return [];
+  return asArr(r.data);
 }
 
 /* =========================
@@ -285,24 +222,21 @@ app.post("/api/groups", async (req, res) => {
    AllInOne bulk fetcher
 ========================= */
 async function fetchAllInOne(auth, deviceIds, from, to, types) {
-  const key = cacheKey("allinone", auth, from, to, ...types);
-  return memo(key, DEFAULT_TTL.trips, async () => {
-    const params = new URLSearchParams();
-    for (const id of deviceIds) params.append("deviceId", String(id));
-    for (const t of types) params.append("type", t);
-    params.append("from", from);
-    params.append("to", to);
-    const url = "/reports/allinone?" + params.toString();
-    const r = await upstream.get(url, {
-      headers: { Cookie: auth },
-      maxRedirects: 5,
-    });
-    if (r.status >= 400) {
-      const body = typeof r.data === 'string' ? r.data.slice(0, 300) : JSON.stringify(r.data).slice(0, 300);
-      throw new Error(`allinone ${r.status}: ${body}`);
-    }
-    return r.data; // { trips: [...], summary: [...], route: [...], stops: [...] }
+  const params = new URLSearchParams();
+  for (const id of deviceIds) params.append("deviceId", String(id));
+  for (const t of types) params.append("type", t);
+  params.append("from", from);
+  params.append("to", to);
+  const url = "/reports/allinone?" + params.toString();
+  const r = await upstream.get(url, {
+    headers: { Cookie: auth },
+    maxRedirects: 5,
   });
+  if (r.status >= 400) {
+    const body = typeof r.data === 'string' ? r.data.slice(0, 300) : JSON.stringify(r.data).slice(0, 300);
+    throw new Error(`allinone ${r.status}: ${body}`);
+  }
+  return r.data; // { trips: [...], summary: [...], route: [...], stops: [...] }
 }
 
 /* =========================
@@ -540,8 +474,6 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
         stateLabel: stateLabel(lastState),
       });
     }
-
-    const totalAlerts = rows.reduce((s, r) => s + r.alertCount, 0);
     res.json({ ok: true, rows, count: rows.length });
   } catch (e) {
     console.error(`[vehicle-alerts] error:`, e.message);
