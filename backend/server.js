@@ -221,7 +221,9 @@ app.post("/api/groups", async (req, res) => {
 /* =========================
    AllInOne bulk fetcher
 ========================= */
-async function fetchAllInOne(auth, deviceIds, from, to, types) {
+const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 10);
+
+async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
   const params = new URLSearchParams();
   for (const id of deviceIds) params.append("deviceId", String(id));
   for (const t of types) params.append("type", t);
@@ -236,7 +238,32 @@ async function fetchAllInOne(auth, deviceIds, from, to, types) {
     const body = typeof r.data === 'string' ? r.data.slice(0, 300) : JSON.stringify(r.data).slice(0, 300);
     throw new Error(`allinone ${r.status}: ${body}`);
   }
-  return r.data; // { trips: [...], summary: [...], route: [...], stops: [...] }
+  return r.data;
+}
+
+async function fetchAllInOne(auth, deviceIds, from, to, types) {
+  if (deviceIds.length <= ALLINONE_CHUNK) {
+    return fetchAllInOneChunk(auth, deviceIds, from, to, types);
+  }
+  // Split into chunks and fetch in parallel
+  const chunks = [];
+  for (let i = 0; i < deviceIds.length; i += ALLINONE_CHUNK) {
+    chunks.push(deviceIds.slice(i, i + ALLINONE_CHUNK));
+  }
+  const results = await Promise.all(
+    chunks.map(chunk => fetchAllInOneChunk(auth, chunk, from, to, types))
+  );
+  // Merge all type arrays
+  const merged = {};
+  for (const r of results) {
+    for (const key of Object.keys(r)) {
+      if (Array.isArray(r[key])) {
+        if (!merged[key]) merged[key] = [];
+        merged[key].push(...r[key]);
+      }
+    }
+  }
+  return merged;
 }
 
 /* =========================
