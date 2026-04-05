@@ -274,19 +274,19 @@ app.post("/api/reports/dashboard", async (req, res) => {
     const t0 = Date.now();
     const timed = (label, promise) => promise.then(r => { console.log(`[dashboard] ${label} done in ${Date.now() - t0}ms`); return r; });
 
-    // Fetch all upstream data in parallel: trips+summary (one allinone call),
-    // events (per device), maintenance (per device), notifications, geofences
-    const [tripsAndSummary, eventLists, maintLists, notifs, geofences] = await Promise.all([
-      timed("allinone(trips+summary)", fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary"])),
-      timed(`events(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)])),
+    // Fetch all upstream data in parallel: trips+summary+events (one allinone call),
+    // maintenance (per device), notifications, geofences
+    const [allInOne, maintLists, notifs, geofences] = await Promise.all([
+      timed("allinone(trips+summary+events)", fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary", "events"])),
       timed(`maint(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)])),
       timed("notifications", getNotifications(auth)),
       timed("geofences", getGeofences(auth)),
     ]);
     console.log(`[dashboard] all fetches done in ${Date.now() - t0}ms`);
 
-    const tripsByDevice = groupBy(tripsAndSummary?.trips, "deviceId");
-    const summaryByDevice = groupBy(tripsAndSummary?.summary, "deviceId");
+    const tripsByDevice = groupBy(allInOne?.trips, "deviceId");
+    const summaryByDevice = groupBy(allInOne?.summary, "deviceId");
+    const eventsByDevice = groupBy(allInOne?.events, "deviceId");
 
     // ---- average-speed ----
     const allTrips = [];
@@ -379,7 +379,7 @@ app.post("/api/reports/dashboard", async (req, res) => {
       return null;
     };
     const alertRows = [];
-    for (const [id, arr0] of eventLists) {
+    for (const [id, arr0] of eventsByDevice) {
       const arr = arr0.slice().sort((a, b) => (Date.parse(a?.serverTime) || 0) - (Date.parse(b?.serverTime) || 0));
       const alertsMap = new Map();
       const geosSet = new Set();
