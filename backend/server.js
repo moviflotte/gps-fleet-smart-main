@@ -240,29 +240,179 @@ async function fetchAllInOne(auth, deviceIds, from, to, types) {
 }
 
 /* =========================
-   KPIs endpoints (résumé)
+   KPIs helpers
 ========================= */
+function groupBy(arr, field) {
+  const map = new Map();
+  for (const item of asArr(arr)) {
+    const key = Number(item?.[field]);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(item);
+  }
+  return map;
+}
 async function fetchTripsForDevices(auth, deviceIds, from, to) {
   const data = await fetchAllInOne(auth, deviceIds, from, to, ["trips"]);
-  const map = new Map();
-  for (const t of asArr(data?.trips)) {
-    const did = Number(t?.deviceId);
-    if (!map.has(did)) map.set(did, []);
-    map.get(did).push(t);
-  }
-  return map;
+  return groupBy(data?.trips, "deviceId");
 }
-
 async function fetchSummaryForDevices(auth, deviceIds, from, to) {
   const data = await fetchAllInOne(auth, deviceIds, from, to, ["summary"]);
-  const map = new Map();
-  for (const s of asArr(data?.summary)) {
-    const did = Number(s?.deviceId);
-    if (!map.has(did)) map.set(did, []);
-    map.get(did).push(s);
-  }
-  return map;
+  return groupBy(data?.summary, "deviceId");
 }
+
+/* =========================
+   Unified dashboard endpoint
+========================= */
+app.post("/api/reports/dashboard", async (req, res) => {
+  const { username, password, deviceIds, from, to } = req.body || {};
+  const auth = makeBasicHeader(username, password);
+  if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
+  if (!Array.isArray(deviceIds) || deviceIds.length === 0) return res.status(400).json({ ok: false, error: "no_devices" });
+  if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
+
+  try {
+    // Fetch all upstream data in parallel: trips+summary (one allinone call),
+    // events (per device), maintenance (per device), notifications, geofences
+    const [tripsAndSummary, eventLists, maintLists, notifs, geofences] = await Promise.all([
+      fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary"]),
+      runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)]),
+      runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)]),
+      getNotifications(auth),
+      getGeofences(auth),
+    ]);
+
+    const tripsByDevice = groupBy(tripsAndSummary?.trips, "deviceId");
+    const summaryByDevice = groupBy(tripsAndSummary?.summary, "deviceId");
+
+    // ---- average-speed ----
+    const allTrips = [];
+    const tripsUsed = new Set();
+    for (const [id, trips] of tripsByDevice) {
+      tripsUsed.add(id);
+      allTrips.push(...trips);
+    }
+    const speedValues = allTrips.map(item => Math.round(item.averageSpeed * 1.85200) * (item.distance / 1000));
+    const totalTripKms = allTrips.reduce((a, b) => a + (b.distance / 1000), 0);
+    const averageSpeed = totalTripKms > 0 ? Math.round(speedValues.reduce((a, b) => a + b, 0) / totalTripKms) : 0;
+
+    // ---- max-speed ----
+    let maxSpeed = 0, maxSpeedMeta = null;
+    for (const [id, trips] of tripsByDevice) {
+      for (const t of trips) {
+        const v = Number(t?.maxSpeed);
+        if (Number.isFinite(v) && v > maxSpeed) {
+          maxSpeed = v;
+          maxSpeedMeta = { deviceId: t?.deviceId ?? id, deviceName: t?.deviceName ?? String(id), startTime: t?.startTime || null, endTime: t?.endTime || null };
+        }
+      }
+    }
+
+    // ---- avg-fuel + perDevice ----
+    const clamp = (x) => { const v = Number(x); if (!Number.isFinite(v)) return null; return v < 0 ? 0 : v; };
+    let totalFuel = 0, totalFuelDist = 0;
+    const fuelPerDevice = [];
+    for (const [id, summaries] of summaryByDevice) {
+      let devFuel = 0, devDist = 0;
+      for (const s of summaries) {
+        const fuel = clamp(s?.spentFuel);
+        const distance = clamp(s?.distance);
+        if (fuel !== null && distance !== null) { totalFuel += fuel; totalFuelDist += distance; devFuel += fuel; devDist += distance; }
+      }
+      const devDistKm = devDist / 1000;
+      fuelPerDevice.push({ deviceId: id, totalFuel: devFuel, totalDistanceKm: devDistKm, avgConsumption: devDistKm > 0 ? (devFuel * 100) / devDistKm : 0 });
+    }
+    const fuelDistKm = totalFuelDist / 1000;
+    const avgConsumption = fuelDistKm > 0 ? (totalFuel * 100) / fuelDistKm : 0;
+
+    // ---- active-devices ----
+    const activeSet = new Set();
+    for (const [id, trips] of tripsByDevice) if (trips.length > 0) activeSet.add(id);
+
+    // ---- total-distance ----
+    let totalDistance = 0;
+    for (const [, summaries] of summaryByDevice) {
+      for (const s of summaries) {
+        const d = Number(s?.distance);
+        if (Number.isFinite(d) && d > 0) totalDistance += d;
+      }
+    }
+
+    // ---- maintenance-efficiency ----
+    let maintTotal = 0, maintOk = 0;
+    for (const [, maints] of maintLists) {
+      maintTotal++;
+      const overdue = Array.isArray(maints) ? maints.some((m) => Number(m?.attributes?.due) <= 0) : false;
+      if (!overdue) maintOk++;
+    }
+    const efficiency = maintTotal > 0 ? (maintOk / maintTotal) * 100 : 0;
+
+    // ---- vehicle-alerts ----
+    const notifMap = new Map();
+    for (const n of asArr(notifs)) {
+      const id = Number(n?.id);
+      const label = n?.attributes?.name || n?.attributes?.alarms || n?.type || `notif:${id}`;
+      if (Number.isFinite(id)) notifMap.set(id, String(label));
+    }
+    const geofenceMap = new Map();
+    for (const g of asArr(geofences)) {
+      const id = Number(g?.id);
+      const name = g?.name || `geofence:${id}`;
+      if (Number.isFinite(id)) geofenceMap.set(id, String(name));
+    }
+    const parseNotifIds = (v) => (v ? String(v).split(/[,\s]+/).map(Number).filter(Number.isFinite) : []);
+    const stateLabel = (s) => (s === "en_service" ? "En service" : s === "arret" ? "Arrêt" : s === "idle" ? "Idle" : "Hors service");
+    const inferStateFromEvent = (ev) => {
+      const t = (ev?.type || "").toLowerCase();
+      if (t === "ignitionon") return "en_service";
+      if (t === "ignitionoff") return "arret";
+      if (t === "alarm") { const al = (ev?.attributes?.alarm || "").toLowerCase(); if (al.includes("idle")) return "idle"; }
+      const nids = parseNotifIds(ev?.attributes?.notifications || ev?.attributes?.notificationId);
+      for (const nid of nids) {
+        const lbl = (notifMap.get(nid) || "").toLowerCase();
+        if (lbl.includes("idle")) return "idle";
+        if (lbl.includes("engineoff") || lbl.includes("engine off") || lbl.includes("arrêt") || lbl.includes("arret")) return "arret";
+      }
+      return null;
+    };
+    const alertRows = [];
+    for (const [id, arr0] of eventLists) {
+      const arr = arr0.slice().sort((a, b) => (Date.parse(a?.serverTime) || 0) - (Date.parse(b?.serverTime) || 0));
+      const alertsMap = new Map();
+      const geosSet = new Set();
+      let alertOccurrences = 0, lastState = null, lastTs = 0;
+      for (const ev of arr) {
+        const evTime = ev?.serverTime || null;
+        if (ev?.type && ev.type !== "alarm") { const lbl = String(ev.type); if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); alertOccurrences += 1; }
+        if (ev?.type === "alarm" && ev?.attributes?.alarm) { const lbl = String(ev.attributes.alarm); if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); }
+        const nids = parseNotifIds(ev?.attributes?.notifications || ev?.attributes?.notificationId);
+        nids.forEach((nid) => { const lbl = notifMap.get(nid) || `notif:${nid}`; if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); });
+        if (ev?.type === "alarm") alertOccurrences += nids.length > 0 ? nids.length : 1;
+        const gid = Number(ev?.geofenceId);
+        if (Number.isFinite(gid) && gid > 0) geosSet.add(geofenceMap.get(gid) || `geofence:${gid}`);
+        const st = inferStateFromEvent(ev);
+        const ts = Date.parse(ev?.serverTime) || 0;
+        if (st && ts >= lastTs) { lastState = st; lastTs = ts; }
+      }
+      if (!lastState) lastState = arr.length ? "en_service" : "hors_service";
+      const alertEntries = Array.from(alertsMap.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([label, time]) => ({ label, time }));
+      alertRows.push({ deviceId: id, alerts: alertEntries.map(e => e.label), alertTimes: Object.fromEntries(alertEntries.map(e => [e.label, e.time])), geofences: Array.from(geosSet).sort((a, b) => a.localeCompare(b)), alertCount: alertOccurrences, geofenceCount: geosSet.size, state: lastState, stateLabel: stateLabel(lastState) });
+    }
+
+    res.json({
+      ok: true,
+      averageSpeed: { averageSpeed },
+      maxSpeed: { maxSpeed: maxSpeed * 1.852, meta: maxSpeedMeta },
+      avgFuel: { avgConsumption, totalFuel, totalDistanceKm: fuelDistKm, perDevice: fuelPerDevice },
+      activeDevices: { count: activeSet.size, activeDeviceIds: Array.from(activeSet) },
+      totalDistance: { totalKm: totalDistance / 1000 },
+      maintenance: { efficiency },
+      vehicleAlerts: { rows: alertRows, count: alertRows.length },
+    });
+  } catch (e) {
+    console.error(`[dashboard] error:`, e.message);
+    res.status(500).json({ ok: false, error: "dashboard_failed", detail: e.message });
+  }
+});
 
 app.post("/api/reports/average-speed", async (req, res) => {
   const { username, password, deviceIds, from, to } = req.body || {};
@@ -334,12 +484,14 @@ app.post("/api/reports/avg-fuel", async (req, res) => {
   try {
     const summaryByDevice = await fetchSummaryForDevices(auth, deviceIds, from, to);
     let totalFuel = 0, totalDistance = 0, summaryCount = 0, used = new Set();
+    const perDevice = [];
     const clamp = (x) => {
       const v = Number(x);
       if (!Number.isFinite(v)) return null;
       return v < 0 ? 0 : v;
     };
     for (const [id, summaries] of summaryByDevice) {
+      let devFuel = 0, devDist = 0;
       if (summaries.length) used.add(id);
       for (const s of summaries) {
         const fuel = clamp(s?.spentFuel);
@@ -347,14 +499,18 @@ app.post("/api/reports/avg-fuel", async (req, res) => {
         if (fuel !== null && distance !== null) {
           totalFuel += fuel;
           totalDistance += distance;
+          devFuel += fuel;
+          devDist += distance;
           summaryCount++;
         }
       }
+      const devDistKm = devDist / 1000;
+      perDevice.push({ deviceId: id, totalFuel: devFuel, totalDistanceKm: devDistKm, avgConsumption: devDistKm > 0 ? (devFuel * 100) / devDistKm : 0 });
     }
     // Calculate L/100km: (totalFuel * 100) / (totalDistance / 1000)
     const distanceKm = totalDistance / 1000;
     const avgConsumption = distanceKm > 0 ? (totalFuel * 100) / distanceKm : 0;
-    res.json({ ok: true, avgConsumption, totalFuel, totalDistanceKm: distanceKm, summaryCount, devicesCountUsed: used.size });
+    res.json({ ok: true, avgConsumption, totalFuel, totalDistanceKm: distanceKm, summaryCount, devicesCountUsed: used.size, perDevice });
   } catch (e) {
     console.error(`[avg-fuel] error:`, e.message);
     res.status(500).json({ ok: false, error: "avg_fuel_failed", detail: e.message });

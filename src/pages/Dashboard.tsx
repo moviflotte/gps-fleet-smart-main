@@ -140,6 +140,7 @@ export default function Dashboard() {
   const [violationCounts, setViolationCounts] = useState({ speed: 0, stop: 0, brake: 0, other: 0 })
 
   const [loadingKPIs, setLoadingKPIs] = useState(false)
+  const [loadTime, setLoadTime] = useState<string | null>(null)
   const [errorKPIs, setErrorKPIs] = useState<string | null>(null)
 
   /* Helpers de classement côté front si pas de summary côté serveur */
@@ -172,7 +173,9 @@ export default function Dashboard() {
   /* Chargement API */
   async function fetchAll(from?: Date, to?: Date) {
     setLoadingKPIs(true)
+    setLoadTime(null)
     setErrorKPIs(null)
+    const t0 = performance.now()
     try {
       const { from: F, to: T } = { from: from ?? range.from, to: to ?? range.to }
       const fromISO = F.toISOString()
@@ -184,24 +187,19 @@ export default function Dashboard() {
       setTotalDevices(ids.length)
       if (ids.length === 0) throw new Error("Aucun véhicule trouvé")
 
-      // 2) Endpoints principaux (aggrégés)
-      const [avg, max, fuel, act, dist, me, ev] = await Promise.all([
-        api.averageSpeed(ids, fromISO, toISO),
-        api.maxSpeed(ids, fromISO, toISO),
-        api.avgFuel(ids, fromISO, toISO),
-        api.activeDevices(ids, fromISO, toISO),
-        api.totalDistance(ids, fromISO, toISO),
-        api.maintenanceEfficiency(ids, fromISO, toISO),
-        api.vehicleAlerts(ids, fromISO, toISO),
-      ])
+      // 2) Single dashboard call (all KPIs computed server-side in parallel)
+      const d = await api.dashboard(ids, fromISO, toISO)
 
-      setSpeedAvg(Number(avg?.averageSpeed || 0))
-      setSpeedMax(Number(max?.maxSpeed || 0))
-      setFuelAvg(Number(fuel?.avgConsumption || 0))
-      setFuelTotal(Number(fuel?.totalFuel || 0))
-      setActiveCount(Number(act?.count || 0))
-      setDistanceTotalKm(Number(dist?.totalKm || 0))
-      setMaintenanceEff(Number(me?.efficiency || 0))
+      setSpeedAvg(Number(d?.averageSpeed?.averageSpeed || 0))
+      setSpeedMax(Number(d?.maxSpeed?.maxSpeed || 0))
+      setFuelAvg(Number(d?.avgFuel?.avgConsumption || 0))
+      setFuelTotal(Number(d?.avgFuel?.totalFuel || 0))
+      setActiveCount(Number(d?.activeDevices?.count || 0))
+      setDistanceTotalKm(Number(d?.totalDistance?.totalKm || 0))
+      setMaintenanceEff(Number(d?.maintenance?.efficiency || 0))
+
+      const fuel = d?.avgFuel
+      const ev = d?.vehicleAlerts
 
       // --------- Alerts : comptages réels & breakdowns ----------
       const rows = Array.isArray(ev?.rows) ? ev.rows : []
@@ -249,7 +247,7 @@ export default function Dashboard() {
         setViolationCounts(cat)
       }
 
-      /* ---- Graphe Top N consommation : calcul par device ---- */
+      /* ---- Graphe Top N consommation : from perDevice breakdown ---- */
       const nameById = new Map<number, string>()
       Array.isArray(devs) && devs.forEach((d: any) => {
         const id = Number(d?.id)
@@ -259,23 +257,20 @@ export default function Dashboard() {
         nameById.set(id, friendly)
       })
 
-      const jobs = ids.map((id) => async () => {
-        const r = await api.avgFuel([id], fromISO, toISO)
-        return { id, avgConsumption: Number(r?.avgConsumption || 0), totalFuel: Number(r?.totalFuel || 0) }
-      })
-      const perDev = await runPool(jobs, 8)
+      const perDev: { deviceId: number; totalFuel: number }[] = Array.isArray(fuel?.perDevice) ? fuel.perDevice : []
 
       const bars = perDev
-        .filter(Boolean)
-        .sort((a, b) => (b.totalFuel || 0) - (a.totalFuel || 0))
+        .filter((d) => d.totalFuel > 0)
+        .sort((a, b) => b.totalFuel - a.totalFuel)
         .slice(0, TOP_N)
-        .map(({ id, totalFuel }) => {
-          const label = nameById.get(id) || String(id)
+        .map(({ deviceId, totalFuel }) => {
+          const label = nameById.get(deviceId) || String(deviceId)
           const short = label.length > 12 ? label.slice(-6) : label
           return { name: short, fuel: Number(totalFuel.toFixed(1)) }
         })
 
       setFuelBars(bars)
+      setLoadTime(`${((performance.now() - t0) / 1000).toFixed(1)}s`)
     } catch (e: any) {
       setErrorKPIs(e?.message || "Erreur de chargement")
     } finally {
@@ -349,12 +344,14 @@ export default function Dashboard() {
       </div>
 
       {/* GRILLE KPI */}
-      {loadingKPIs && (
+      {loadingKPIs ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
-          <span>Chargement des données...</span>
+          <span>Chargement des données…</span>
         </div>
-      )}
+      ) : loadTime ? (
+        <div className="text-xs text-muted-foreground">Chargé en {loadTime}</div>
+      ) : null}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {visibleKpis.speedAvg && (
           <KPICard title="Vitesse Moyenne" value={`${speedAvg.toFixed(1)} km/h`} subtitle="moyenne sur la période" trend={{ value: loadingKPIs ? "…" : "", isPositive: true }} status="success" icon={<Gauge />} />
@@ -451,18 +448,4 @@ export default function Dashboard() {
       {errorKPIs && <div className="text-sm text-red-600">{errorKPIs}</div>}
     </div>
   )
-}
-
-/* --------- petit helper de parallélisation des requêtes --------- */
-async function runPool<T>(jobs: (() => Promise<T>)[], concurrency = 8): Promise<T[]> {
-  const out: T[] = []
-  let i = 0
-  const workers = new Array(Math.min(concurrency, jobs.length)).fill(0).map(async () => {
-    while (i < jobs.length) {
-      const idx = i++
-      try { out[idx] = await jobs[idx]() } catch { /* ignore */ }
-    }
-  })
-  await Promise.all(workers)
-  return out
 }

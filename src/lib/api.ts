@@ -85,6 +85,8 @@ export const api = {
   groups: () => postJSON("/api/groups"),
 
   /* =============== REPORTS =============== */
+  dashboard: (deviceIds: number[], from: string, to: string) =>
+    postJSON("/api/reports/dashboard", { deviceIds, from, to }),
   averageSpeed: (deviceIds: number[], from: string, to: string) =>
     postJSON("/api/reports/average-speed", { deviceIds, from, to }),
   maxSpeed: (deviceIds: number[], from: string, to: string) =>
