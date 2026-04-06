@@ -223,7 +223,7 @@ app.post("/api/groups", async (req, res) => {
 ========================= */
 const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 1);
 const ALLINONE_PARALLEL = Number(process.env.ALLINONE_PARALLEL || 1);
-const ALLIONE_RETRIES = 1;
+const ALLINONE_RETRIES = 1;
 
 async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
   const params = new URLSearchParams();
