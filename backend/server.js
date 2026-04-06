@@ -237,7 +237,7 @@ app.post("/api/groups", async (req, res) => {
 /* =========================
    AllInOne bulk fetcher
 ========================= */
-const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 2);
+const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 1);
 const ALLINONE_PARALLEL = Number(process.env.ALLINONE_PARALLEL || 1);
 const ALLINONE_RETRIES = 3;
 
