@@ -240,12 +240,12 @@ async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
       });
       if (r.status >= 400) {
         const body = typeof r.data === 'string' ? r.data.slice(0, 300) : JSON.stringify(r.data).slice(0, 300);
-        throw new Error(`allinone ${r.status}: ${body}`);
+        throw new Error(`allinone ${r.status} ${url}: ${body}`);
       }
       return r.data;
     } catch (err) {
       if (attempt < ALLINONE_RETRIES) {
-        console.log(`[allinone] attempt ${attempt + 1} failed, retrying in ${(attempt + 1) * 500}ms: ${err.message}`);
+        console.log(`[allinone] attempt ${attempt + 1} failed for ${url}, retrying in ${(attempt + 1) * 500}ms: ${err.message}`);
         await new Promise(r => setTimeout(r, (attempt + 1) * 500));
         continue;
       }
