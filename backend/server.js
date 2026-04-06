@@ -310,10 +310,9 @@ app.post("/api/reports/dashboard", async (req, res) => {
     const t0 = Date.now();
     const timed = (label, promise) => promise.then(r => { console.log(`[dashboard] ${label} done in ${Date.now() - t0}ms`); return r; });
 
-    // Fetch all upstream data in parallel: trips+summary+events (one allinone call),
-    // maintenance (per device), notifications, geofences
-    const [allInOne, maintLists, notifs, geofences] = await Promise.all([
-      timed("allinone(trips+summary+events)", fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary", "events"])),
+    // Fetch allinone first (heavy), then remaining requests in parallel
+    const allInOne = await timed("allinone(trips+summary+events)", fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary", "events"]));
+    const [maintLists, notifs, geofences] = await Promise.all([
       timed(`maint(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)])),
       timed("notifications", getNotifications(auth)),
       timed("geofences", getGeofences(auth)),
