@@ -135,7 +135,7 @@ async function runPool(items, limit, worker) {
   await Promise.all(runners);
   return results;
 }
-const CONCURRENCY = Number(process.env.UPSTREAM_CONCURRENCY || 30);
+const CONCURRENCY = Number(process.env.UPSTREAM_CONCURRENCY || 10);
 
 /* =========================
    Shared fetchers PinMe
@@ -222,7 +222,7 @@ app.post("/api/groups", async (req, res) => {
    AllInOne bulk fetcher
 ========================= */
 const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 10);
-const ALLINONE_CONCURRENCY = Number(process.env.ALLINONE_CONCURRENCY || 3);
+const ALLINONE_RETRIES = 2;
 
 async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
   const params = new URLSearchParams();
@@ -231,38 +231,40 @@ async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
   params.append("from", from);
   params.append("to", to);
   const url = "/reports/allinone?" + params.toString();
-  const r = await upstream.get(url, {
-    headers: { Cookie: auth },
-    maxRedirects: 5,
-  });
-  if (r.status >= 400) {
-    const body = typeof r.data === 'string' ? r.data.slice(0, 300) : JSON.stringify(r.data).slice(0, 300);
-    throw new Error(`allinone ${r.status}: ${body}`);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const r = await upstream.get(url, {
+        headers: { Cookie: auth },
+        maxRedirects: 5,
+      });
+      if (r.status >= 400) {
+        const body = typeof r.data === 'string' ? r.data.slice(0, 300) : JSON.stringify(r.data).slice(0, 300);
+        throw new Error(`allinone ${r.status}: ${body}`);
+      }
+      return r.data;
+    } catch (err) {
+      if (attempt < ALLINONE_RETRIES) {
+        console.log(`[allinone] attempt ${attempt + 1} failed, retrying in ${(attempt + 1) * 500}ms: ${err.message}`);
+        await new Promise(r => setTimeout(r, (attempt + 1) * 500));
+        continue;
+      }
+      throw err;
+    }
   }
-  return r.data;
 }
 
 async function fetchAllInOne(auth, deviceIds, from, to, types) {
   if (deviceIds.length <= ALLINONE_CHUNK) {
     return fetchAllInOneChunk(auth, deviceIds, from, to, types);
   }
-  // Split into chunks
+  // Split into chunks and fetch sequentially to avoid overwhelming upstream
   const chunks = [];
   for (let i = 0; i < deviceIds.length; i += ALLINONE_CHUNK) {
     chunks.push(deviceIds.slice(i, i + ALLINONE_CHUNK));
   }
-  // Fetch with limited concurrency to avoid overwhelming upstream
-  const results = [];
-  for (let i = 0; i < chunks.length; i += ALLINONE_CONCURRENCY) {
-    const batch = chunks.slice(i, i + ALLINONE_CONCURRENCY);
-    const batchResults = await Promise.all(
-      batch.map(chunk => fetchAllInOneChunk(auth, chunk, from, to, types))
-    );
-    results.push(...batchResults);
-  }
-  // Merge all type arrays
   const merged = {};
-  for (const r of results) {
+  for (const chunk of chunks) {
+    const r = await fetchAllInOneChunk(auth, chunk, from, to, types);
     for (const key of Object.keys(r)) {
       if (Array.isArray(r[key])) {
         if (!merged[key]) merged[key] = [];
