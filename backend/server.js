@@ -222,6 +222,7 @@ app.post("/api/groups", async (req, res) => {
    AllInOne bulk fetcher
 ========================= */
 const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 10);
+const ALLINONE_PARALLEL = Number(process.env.ALLINONE_PARALLEL || 2);
 const ALLINONE_RETRIES = 2;
 
 async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
@@ -257,18 +258,23 @@ async function fetchAllInOne(auth, deviceIds, from, to, types) {
   if (deviceIds.length <= ALLINONE_CHUNK) {
     return fetchAllInOneChunk(auth, deviceIds, from, to, types);
   }
-  // Split into chunks and fetch sequentially to avoid overwhelming upstream
+  // Split into chunks, fetch ALLINONE_PARALLEL at a time
   const chunks = [];
   for (let i = 0; i < deviceIds.length; i += ALLINONE_CHUNK) {
     chunks.push(deviceIds.slice(i, i + ALLINONE_CHUNK));
   }
   const merged = {};
-  for (const chunk of chunks) {
-    const r = await fetchAllInOneChunk(auth, chunk, from, to, types);
-    for (const key of Object.keys(r)) {
-      if (Array.isArray(r[key])) {
-        if (!merged[key]) merged[key] = [];
-        merged[key].push(...r[key]);
+  for (let i = 0; i < chunks.length; i += ALLINONE_PARALLEL) {
+    const batch = chunks.slice(i, i + ALLINONE_PARALLEL);
+    const results = await Promise.all(
+      batch.map(chunk => fetchAllInOneChunk(auth, chunk, from, to, types))
+    );
+    for (const r of results) {
+      for (const key of Object.keys(r)) {
+        if (Array.isArray(r[key])) {
+          if (!merged[key]) merged[key] = [];
+          merged[key].push(...r[key]);
+        }
       }
     }
   }
