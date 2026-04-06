@@ -4,7 +4,6 @@ import dotenv from "dotenv";
 dotenv.config(); // IMPORTANT: avant toute lecture de process.env
 
 import express from "express";
-import axios from "axios";
 import http from "http";
 import https from "https";
 import fs from "fs";
@@ -79,26 +78,43 @@ const ADMIN_USER = process.env.ADMIN_USER || "";
 const ADMIN_PASS = process.env.ADMIN_PASS || "";
 
 /* =========================
-   Axios upstream (PinMe)
+   Upstream fetch helpers (PinMe)
 ========================= */
-const upstream = axios.create({
-  baseURL: BASE,
-  httpAgent: new http.Agent({ keepAlive: false }),
-  httpsAgent: new https.Agent({ keepAlive: false }),
-  decompress: true,
-  validateStatus: () => true,   // never throw on HTTP status — each fetcher checks r.status
-});
-
-/* =========================
-   Upstream interceptors
-========================= */
-upstream.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    console.error(`[upstream ✗] ${err.config?.url} — ${err.message}`);
-    return Promise.reject(err);
-  }
-);
+async function upstreamGet(urlPath, { headers = {}, params } = {}) {
+  const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+  const fullUrl = BASE + urlPath + qs;
+  const res = await fetch(fullUrl, { headers, redirect: "follow" });
+  const data = res.headers.get("content-type")?.includes("json")
+    ? await res.json()
+    : await res.text();
+  return { status: res.status, data };
+}
+async function upstreamPost(urlPath, body, { headers = {} } = {}) {
+  const fullUrl = BASE + urlPath;
+  const res = await fetch(fullUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body),
+    redirect: "follow",
+  });
+  const data = res.headers.get("content-type")?.includes("json")
+    ? await res.json()
+    : await res.text();
+  return { status: res.status, data };
+}
+async function upstreamPut(urlPath, body, { headers = {} } = {}) {
+  const fullUrl = BASE + urlPath;
+  const res = await fetch(fullUrl, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body),
+    redirect: "follow",
+  });
+  const data = res.headers.get("content-type")?.includes("json")
+    ? await res.json()
+    : await res.text();
+  return { status: res.status, data };
+}
 
 /* =========================
    Helpers
@@ -141,32 +157,32 @@ const CONCURRENCY = Number(process.env.UPSTREAM_CONCURRENCY || 10);
    Shared fetchers PinMe
 ========================= */
 async function getDevices(auth) {
-  const r = await upstream.get("/devices", { headers: { Cookie: auth } });
+  const r = await upstreamGet("/devices", { headers: { Cookie: auth } });
   if (r.status >= 400) throw new Error(`devices ${r.status}`);
   return asArr(r.data);
 }
 async function getGroups(auth) {
-  const r = await upstream.get("/groups", { headers: { Cookie: auth }, params: { all: true } });
+  const r = await upstreamGet("/groups", { headers: { Cookie: auth }, params: { all: true } });
   if (r.status >= 400) throw new Error(`groups ${r.status}`);
   return asArr(r.data);
 }
 async function getNotifications(auth) {
-  const r = await upstream.get("/notifications", { headers: { Cookie: auth }, params: { all: true } });
+  const r = await upstreamGet("/notifications", { headers: { Cookie: auth }, params: { all: true } });
   if (r.status >= 400) return [];
   return asArr(r.data);
 }
 async function getGeofences(auth) {
-  const r = await upstream.get("/geofences", { headers: { Cookie: auth }, params: { all: true } });
+  const r = await upstreamGet("/geofences", { headers: { Cookie: auth }, params: { all: true } });
   if (r.status >= 400) return [];
   return asArr(r.data);
 }
 async function getEvents(auth, deviceId, from, to) {
-  const r = await upstream.get("/reports/events", { headers: { Cookie: auth }, params: { deviceId, from, to } });
+  const r = await upstreamGet("/reports/events", { headers: { Cookie: auth }, params: { deviceId, from, to } });
   if (r.status >= 400) return [];
   return asArr(r.data);
 }
 async function getMaint(auth, deviceId) {
-  const r = await upstream.get("/maintenance", { headers: { Cookie: auth }, params: { deviceId } });
+  const r = await upstreamGet("/maintenance", { headers: { Cookie: auth }, params: { deviceId } });
   if (r.status >= 400) return [];
   return asArr(r.data);
 }
@@ -179,7 +195,7 @@ app.post("/api/login", async (req, res) => {
   const auth = makeBasicHeader(username, password);
   if (!auth) return res.status(400).json({ ok: false, error: "missing_credentials" });
   try {
-    const r = await upstream.get(TEST_PATH, { headers: { Cookie: auth }, params: { all: true } });
+    const r = await upstreamGet(TEST_PATH, { headers: { Cookie: auth }, params: { all: true } });
     if (r.status >= 400) {
       const status = r.status;
       if (status === 401 || status === 403) return res.status(status).json({ ok: false, error: "invalid_credentials", status });
@@ -234,9 +250,8 @@ async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
   const url = "/reports/allinone?" + params.toString();
   for (let attempt = 0; ; attempt++) {
     try {
-      const r = await upstream.get(url, {
+      const r = await upstreamGet(url, {
         headers: { Cookie: auth },
-        maxRedirects: 5,
       });
       if (r.status >= 400) {
         const body = typeof r.data === 'string' ? r.data.slice(0, 300) : JSON.stringify(r.data).slice(0, 300);
@@ -699,7 +714,7 @@ async function loadCompanyState(company) {
   const key = keyForCompany(company);
   const auth = adminAuthHeader();
 
-  const list = await upstream.get("/attributes/computed", { headers: { Cookie: auth }, params: { all: true } });
+  const list = await upstreamGet("/attributes/computed", { headers: { Cookie: auth }, params: { all: true } });
   if (list.status >= 400) throw new Error(`pinme_list_failed_${list.status}`);
 
   const found = asArr(list.data).find((a) => String(a?.attribute) === key);
@@ -713,14 +728,14 @@ async function createCompanyState(company, initialObj = {}) {
   const key = keyForCompany(company);
   const auth = adminAuthHeader();
   const payload = { attribute: key, description: "Fleet Alerts State (shared by company)", expression: JSON.stringify(initialObj || {}) };
-  const r = await upstream.post("/attributes/computed", payload, { headers: { Cookie: auth } });
+  const r = await upstreamPost("/attributes/computed", payload, { headers: { Cookie: auth } });
   if (r.status >= 400) throw new Error(`pinme_create_failed_${r.status}`);
   const id = Number(r.data?.id);
   return { id: Number.isFinite(id) ? id : null, state: initialObj || {} };
 }
 async function updateCompanyState(id, obj) {
   const auth = adminAuthHeader();
-  const r = await upstream.put(`/attributes/computed/${id}`, { expression: JSON.stringify(obj || {}) }, { headers: { Cookie: auth } });
+  const r = await upstreamPut(`/attributes/computed/${id}`, { expression: JSON.stringify(obj || {}) }, { headers: { Cookie: auth } });
   if (r.status >= 400) throw new Error(`pinme_update_failed_${r.status}`);
   return true;
 }
