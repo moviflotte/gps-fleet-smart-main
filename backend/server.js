@@ -237,9 +237,9 @@ app.post("/api/groups", async (req, res) => {
 /* =========================
    AllInOne bulk fetcher
 ========================= */
-const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 1);
-const ALLINONE_PARALLEL = Number(process.env.ALLINONE_PARALLEL || 1);
-const ALLINONE_RETRIES = 1;
+const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 10);
+const ALLINONE_PARALLEL = Number(process.env.ALLINONE_PARALLEL || 2);
+const ALLINONE_RETRIES = 3;
 
 async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
   const params = new URLSearchParams();
@@ -260,8 +260,9 @@ async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
       return r.data;
     } catch (err) {
       if (attempt < ALLINONE_RETRIES) {
-        console.log(`[allinone] attempt ${attempt + 1} failed for ${url}, retrying in ${(attempt + 1) * 500}ms: ${err.message}`);
-        await new Promise(r => setTimeout(r, (attempt + 1) * 500));
+        const delay = (attempt + 1) * 200;
+        console.log(`[allinone] attempt ${attempt + 1} failed for ${url}, retrying in ${delay}ms: ${err.message}`);
+        await new Promise(r => setTimeout(r, delay));
         continue;
       }
       throw err;
