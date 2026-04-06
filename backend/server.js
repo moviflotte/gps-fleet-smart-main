@@ -84,9 +84,9 @@ async function upstreamGet(urlPath, { headers = {}, params } = {}) {
   const qs = params ? "?" + new URLSearchParams(params).toString() : "";
   const fullUrl = BASE + urlPath + qs;
   const res = await fetch(fullUrl, { headers, redirect: "follow" });
-  const data = res.headers.get("content-type")?.includes("json")
-    ? await res.json()
-    : await res.text();
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data };
 }
 async function upstreamPost(urlPath, body, { headers = {} } = {}) {
@@ -97,9 +97,9 @@ async function upstreamPost(urlPath, body, { headers = {} } = {}) {
     body: JSON.stringify(body),
     redirect: "follow",
   });
-  const data = res.headers.get("content-type")?.includes("json")
-    ? await res.json()
-    : await res.text();
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data };
 }
 async function upstreamPut(urlPath, body, { headers = {} } = {}) {
@@ -110,9 +110,9 @@ async function upstreamPut(urlPath, body, { headers = {} } = {}) {
     body: JSON.stringify(body),
     redirect: "follow",
   });
-  const data = res.headers.get("content-type")?.includes("json")
-    ? await res.json()
-    : await res.text();
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data };
 }
 
