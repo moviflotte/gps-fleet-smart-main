@@ -222,6 +222,7 @@ app.post("/api/groups", async (req, res) => {
    AllInOne bulk fetcher
 ========================= */
 const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 10);
+const ALLINONE_CONCURRENCY = Number(process.env.ALLINONE_CONCURRENCY || 3);
 
 async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
   const params = new URLSearchParams();
@@ -245,14 +246,20 @@ async function fetchAllInOne(auth, deviceIds, from, to, types) {
   if (deviceIds.length <= ALLINONE_CHUNK) {
     return fetchAllInOneChunk(auth, deviceIds, from, to, types);
   }
-  // Split into chunks and fetch in parallel
+  // Split into chunks
   const chunks = [];
   for (let i = 0; i < deviceIds.length; i += ALLINONE_CHUNK) {
     chunks.push(deviceIds.slice(i, i + ALLINONE_CHUNK));
   }
-  const results = await Promise.all(
-    chunks.map(chunk => fetchAllInOneChunk(auth, chunk, from, to, types))
-  );
+  // Fetch with limited concurrency to avoid overwhelming upstream
+  const results = [];
+  for (let i = 0; i < chunks.length; i += ALLINONE_CONCURRENCY) {
+    const batch = chunks.slice(i, i + ALLINONE_CONCURRENCY);
+    const batchResults = await Promise.all(
+      batch.map(chunk => fetchAllInOneChunk(auth, chunk, from, to, types))
+    );
+    results.push(...batchResults);
+  }
   // Merge all type arrays
   const merged = {};
   for (const r of results) {
