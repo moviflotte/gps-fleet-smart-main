@@ -83,8 +83,8 @@ const ADMIN_PASS = process.env.ADMIN_PASS || "";
 ========================= */
 const upstream = axios.create({
   baseURL: BASE,
-  httpAgent: new http.Agent({ keepAlive: true, maxSockets: 64 }),
-  httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 64 }),
+  httpAgent: new http.Agent({ keepAlive: false }),
+  httpsAgent: new https.Agent({ keepAlive: false }),
   decompress: true,
   validateStatus: () => true,   // never throw on HTTP status — each fetcher checks r.status
 });
