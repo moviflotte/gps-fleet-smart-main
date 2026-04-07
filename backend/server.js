@@ -4,7 +4,6 @@ import dotenv from "dotenv";
 dotenv.config(); // IMPORTANT: avant toute lecture de process.env
 
 import express from "express";
-import http from "http";
 import https from "https";
 import fs from "fs";
 import path from "path";
@@ -238,7 +237,7 @@ app.post("/api/groups", async (req, res) => {
    AllInOne bulk fetcher
 ========================= */
 const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 10);
-const ALLINONE_PARALLEL = Number(process.env.ALLINONE_PARALLEL || 5);
+const ALLINONE_PARALLEL = Number(process.env.ALLINONE_PARALLEL || 10);
 const ALLINONE_RETRIES = 3;
 
 async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
