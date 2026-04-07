@@ -1316,6 +1316,8 @@ app.use(express.static(path.join(__dirname, "public")));
 const SSL_CERT = process.env.SSL_CERT || "/etc/letsencrypt/live/hetzner.moviflotte.com/fullchain.pem";
 const SSL_KEY = process.env.SSL_KEY || "/etc/letsencrypt/live/hetzner.moviflotte.com/privkey.pem";
 
+console.log(`[config] ALLINONE_CHUNK=${ALLINONE_CHUNK} ALLINONE_PARALLEL=${ALLINONE_PARALLEL} ALLINONE_RETRIES=${ALLINONE_RETRIES} UPSTREAM_CONCURRENCY=${CONCURRENCY}`);
+
 app.listen(PORT, () => {
   console.log(`HTTP server running on http://localhost:${PORT}`);
 });
