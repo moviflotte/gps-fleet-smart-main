@@ -434,7 +434,12 @@ app.post("/api/reports/dashboard", async (req, res) => {
       }
       return null;
     };
+    const totalEventsRaw = asArr(allInOne?.events).length;
+    console.log(`[dashboard][alerts] notifMap=${notifMap.size} geofenceMap=${geofenceMap.size} totalEventsFromAllInOne=${totalEventsRaw} devicesWithEvents=${eventsByDevice.size}/${deviceIds.length}`);
     const alertRows = [];
+    let grandAlertOccurrences = 0;
+    const eventTypeTally = new Map();
+    const alarmLabelTally = new Map();
     for (const [id, arr0] of eventsByDevice) {
       const arr = arr0.slice().sort((a, b) => (Date.parse(a?.serverTime) || 0) - (Date.parse(b?.serverTime) || 0));
       const alertsMap = new Map();
@@ -442,8 +447,9 @@ app.post("/api/reports/dashboard", async (req, res) => {
       let alertOccurrences = 0, lastState = null, lastTs = 0;
       for (const ev of arr) {
         const evTime = ev?.serverTime || null;
+        if (ev?.type) eventTypeTally.set(ev.type, (eventTypeTally.get(ev.type) || 0) + 1);
         if (ev?.type && ev.type !== "alarm") { const lbl = String(ev.type); if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); alertOccurrences += 1; }
-        if (ev?.type === "alarm" && ev?.attributes?.alarm) { const lbl = String(ev.attributes.alarm); if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); }
+        if (ev?.type === "alarm" && ev?.attributes?.alarm) { const lbl = String(ev.attributes.alarm); alarmLabelTally.set(lbl, (alarmLabelTally.get(lbl) || 0) + 1); if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); }
         const nids = parseNotifIds(ev?.attributes?.notifications || ev?.attributes?.notificationId);
         nids.forEach((nid) => { const lbl = notifMap.get(nid) || `notif:${nid}`; if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); });
         if (ev?.type === "alarm") alertOccurrences += nids.length > 0 ? nids.length : 1;
@@ -455,8 +461,15 @@ app.post("/api/reports/dashboard", async (req, res) => {
       }
       if (!lastState) lastState = arr.length ? "en_service" : "hors_service";
       const alertEntries = Array.from(alertsMap.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([label, time]) => ({ label, time }));
+      grandAlertOccurrences += alertOccurrences;
+      if (alertOccurrences > 0 || alertEntries.length > 0) {
+        console.log(`[dashboard][alerts] device=${id} events=${arr.length} alertOccurrences=${alertOccurrences} distinctLabels=${alertEntries.length} labels=${JSON.stringify(alertEntries.map(e => e.label))}`);
+      }
       alertRows.push({ deviceId: id, alerts: alertEntries.map(e => e.label), alertTimes: Object.fromEntries(alertEntries.map(e => [e.label, e.time])), geofences: Array.from(geosSet).sort((a, b) => a.localeCompare(b)), alertCount: alertOccurrences, geofenceCount: geosSet.size, state: lastState, stateLabel: stateLabel(lastState) });
     }
+    const topEventTypes = Array.from(eventTypeTally.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const topAlarmLabels = Array.from(alarmLabelTally.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    console.log(`[dashboard][alerts] summary: rows=${alertRows.length} grandAlertOccurrences=${grandAlertOccurrences} topEventTypes=${JSON.stringify(topEventTypes)} topAlarmLabels=${JSON.stringify(topAlarmLabels)}`);
 
     console.log(`[dashboard] compute done in ${Date.now() - t0}ms | ${deviceIds.length} devices`);
 
