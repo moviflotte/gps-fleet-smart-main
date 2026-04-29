@@ -355,16 +355,31 @@ app.post("/api/reports/dashboard", async (req, res) => {
     if (sampleEvent) {
       console.log(`[dashboard] sample event: ${JSON.stringify(sampleEvent).slice(0, 400)}`);
     }
-    const [maintLists, notifs, geofences] = await Promise.all([
+    const allInOneEvents = asArr(allInOne?.events);
+    const needsEventsFallback = allInOneEvents.length === 0;
+    if (needsEventsFallback) {
+      console.log(`[dashboard] allinone returned no events — falling back to per-device /reports/events`);
+    }
+    const [maintLists, notifs, geofences, eventsFallback] = await Promise.all([
       timed(`maint(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)])),
       timed("notifications", getNotifications(auth)),
       timed("geofences", getGeofences(auth)),
+      needsEventsFallback
+        ? timed(`events-fallback(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)]))
+        : Promise.resolve(null),
     ]);
     console.log(`[dashboard] all fetches done in ${Date.now() - t0}ms`);
 
     const tripsByDevice = groupBy(allInOne?.trips, "deviceId");
     const summaryByDevice = groupBy(allInOne?.summary, "deviceId");
-    const eventsByDevice = groupBy(allInOne?.events, "deviceId");
+    let eventsByDevice;
+    if (eventsFallback) {
+      eventsByDevice = new Map(eventsFallback.map(([id, arr]) => [Number(id), asArr(arr)]));
+      const totalFallbackEvents = eventsFallback.reduce((s, [, arr]) => s + asArr(arr).length, 0);
+      console.log(`[dashboard] events fallback: totalEvents=${totalFallbackEvents} devicesWithEvents=${Array.from(eventsByDevice.values()).filter(a => a.length > 0).length}/${deviceIds.length}`);
+    } else {
+      eventsByDevice = groupBy(allInOne?.events, "deviceId");
+    }
 
     // ---- average-speed ----
     const allTrips = [];
