@@ -167,17 +167,31 @@ async function getGroups(auth) {
 }
 async function getNotifications(auth) {
   const r = await upstreamGet("/notifications", { headers: { Cookie: auth }, params: { all: true } });
-  if (r.status >= 400) return [];
-  return asArr(r.data);
+  if (r.status >= 400) {
+    const body = typeof r.data === 'string' ? r.data.slice(0, 200) : JSON.stringify(r.data).slice(0, 200);
+    console.warn(`[notifications] upstream ${r.status}: ${body}`);
+    return [];
+  }
+  const arr = asArr(r.data);
+  console.log(`[notifications] loaded ${arr.length} notifications`);
+  return arr;
 }
 async function getGeofences(auth) {
   const r = await upstreamGet("/geofences", { headers: { Cookie: auth }, params: { all: true } });
-  if (r.status >= 400) return [];
+  if (r.status >= 400) {
+    const body = typeof r.data === 'string' ? r.data.slice(0, 200) : JSON.stringify(r.data).slice(0, 200);
+    console.warn(`[geofences] upstream ${r.status}: ${body}`);
+    return [];
+  }
   return asArr(r.data);
 }
 async function getEvents(auth, deviceId, from, to) {
   const r = await upstreamGet("/reports/events", { headers: { Cookie: auth }, params: { deviceId, from, to } });
-  if (r.status >= 400) return [];
+  if (r.status >= 400) {
+    const body = typeof r.data === 'string' ? r.data.slice(0, 200) : JSON.stringify(r.data).slice(0, 200);
+    console.warn(`[events] upstream ${r.status} device=${deviceId}: ${body}`);
+    return [];
+  }
   return asArr(r.data);
 }
 async function getMaint(auth, deviceId) {
@@ -333,6 +347,14 @@ app.post("/api/reports/dashboard", async (req, res) => {
 
     // Fetch allinone first (heavy), then remaining requests in parallel
     const allInOne = await timed("allinone(trips+summary+events)", fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary", "events"]));
+    const allInOneShape = allInOne && typeof allInOne === 'object'
+      ? Object.fromEntries(Object.keys(allInOne).map(k => [k, Array.isArray(allInOne[k]) ? allInOne[k].length : typeof allInOne[k]]))
+      : { _type: typeof allInOne };
+    console.log(`[dashboard] allinone shape: ${JSON.stringify(allInOneShape)} | range from=${from} to=${to}`);
+    const sampleEvent = asArr(allInOne?.events)[0];
+    if (sampleEvent) {
+      console.log(`[dashboard] sample event: ${JSON.stringify(sampleEvent).slice(0, 400)}`);
+    }
     const [maintLists, notifs, geofences] = await Promise.all([
       timed(`maint(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)])),
       timed("notifications", getNotifications(auth)),
