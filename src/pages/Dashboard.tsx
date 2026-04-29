@@ -13,6 +13,14 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { cn } from "@/lib/utils"
+import {
   Truck,
   Fuel,
   AlertTriangle,
@@ -130,6 +138,7 @@ export default function Dashboard() {
   const [distanceTotalKm, setDistanceTotalKm] = useState(0)
   const [maintenanceEff, setMaintenanceEff] = useState(0) // %
   const [alertsCount, setAlertsCount] = useState(0)
+  const [alertCategory, setAlertCategory] = useState<"all" | "speed" | "stop" | "brake" | "other">("all")
 
   /* Données pour graphe Top Conso */
   const [fuelBars, setFuelBars] = useState<{ name: string; fuel: number }[]>([])
@@ -388,9 +397,40 @@ export default function Dashboard() {
         {visibleKpis.maintenanceEff && (
           <KPICard title="Efficacité Maintenance" value={`${maintenanceEff.toFixed(0)}%`} subtitle="respect des intervalles" trend={{ value: loadingKPIs ? "…" : "", isPositive: maintenanceEff >= 80 }} status={maintenanceEff >= 80 ? "success" : maintenanceEff >= 50 ? "warning" : "danger"} icon={<TrendingUp />} />
         )}
-        {visibleKpis.alerts && (
-          <KPICard title="Alertes (événements)" value={alertsCount} subtitle="toutes catégories" trend={{ value: loadingKPIs ? "…" : "", isPositive: alertsCount === 0 }} status={alertsCount > 5 ? "danger" : alertsCount > 0 ? "warning" : "success"} icon={<AlertTriangle />} />
-        )}
+        {visibleKpis.alerts && (() => {
+          const categoryOptions = [
+            { key: "all" as const, label: "Toutes catégories", count: alertsCount },
+            { key: "speed" as const, label: "Excès de vitesse", count: violationCounts.speed },
+            { key: "stop" as const, label: "Temps d'arrêt", count: violationCounts.stop },
+            { key: "brake" as const, label: "Freinage brusque", count: violationCounts.brake },
+            { key: "other" as const, label: "Autres", count: violationCounts.other },
+          ]
+          const selected = categoryOptions.find(o => o.key === alertCategory) ?? categoryOptions[0]
+          const status = selected.count > 5 ? "text-danger" : selected.count > 0 ? "text-warning" : "text-success"
+          return (
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Alertes (événements)</CardTitle>
+                <div className={cn("h-4 w-4", status)}><AlertTriangle /></div>
+              </CardHeader>
+              <CardContent>
+                <div className={cn("text-2xl font-bold", status)}>{selected.count}</div>
+                <Select value={alertCategory} onValueChange={(v) => setAlertCategory(v as typeof alertCategory)}>
+                  <SelectTrigger className="h-7 text-xs mt-1 px-2">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white border shadow-lg z-50">
+                    {categoryOptions.map(o => (
+                      <SelectItem key={o.key} value={o.key} className="text-xs">
+                        {o.label} ({o.count})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </CardContent>
+            </Card>
+          )
+        })()}
       </div>
 
       {/* Bloc comparaison / filtres */}
