@@ -262,6 +262,22 @@ app.post("/api/groups", async (req, res) => {
 const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 1);
 const ALLINONE_PARALLEL = Number(process.env.ALLINONE_PARALLEL || 20);
 const ALLINONE_RETRIES = Number(process.env.ALLINONE_RETRIES || 1);
+const ALLINONE_DATE_CHUNK_DAYS = Number(process.env.ALLINONE_DATE_CHUNK_DAYS || 7);
+
+function splitDateRange(from, to, days) {
+  const fromMs = Date.parse(from);
+  const toMs = Date.parse(to);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs || !(days > 0)) {
+    return [{ from, to }];
+  }
+  const windowMs = days * 24 * 60 * 60 * 1000;
+  const out = [];
+  for (let start = fromMs; start < toMs; start += windowMs) {
+    const end = Math.min(start + windowMs, toMs);
+    out.push({ from: new Date(start).toISOString(), to: new Date(end).toISOString() });
+  }
+  return out;
+}
 
 async function fetchAllInOneChunk(auth, deviceIds, from, to, types, label = "") {
   const params = new URLSearchParams();
@@ -301,25 +317,34 @@ async function fetchAllInOneChunk(auth, deviceIds, from, to, types, label = "") 
 }
 
 async function fetchAllInOne(auth, deviceIds, from, to, types) {
-  if (deviceIds.length <= ALLINONE_CHUNK) {
-    return fetchAllInOneChunk(auth, deviceIds, from, to, types, "1/1");
-  }
-  // Split into chunks, fetch ALLINONE_PARALLEL at a time
-  const chunks = [];
+  const deviceChunks = [];
   for (let i = 0; i < deviceIds.length; i += ALLINONE_CHUNK) {
-    chunks.push(deviceIds.slice(i, i + ALLINONE_CHUNK));
+    deviceChunks.push(deviceIds.slice(i, i + ALLINONE_CHUNK));
   }
-  console.log(`[allinone] plan: ${deviceIds.length} devices → ${chunks.length} chunks of ≤${ALLINONE_CHUNK}, ${ALLINONE_PARALLEL} in parallel, types=${types.join("+")}`);
+  const dateWindows = splitDateRange(from, to, ALLINONE_DATE_CHUNK_DAYS);
+  const tasks = [];
+  for (let di = 0; di < deviceChunks.length; di++) {
+    for (let wi = 0; wi < dateWindows.length; wi++) {
+      tasks.push({
+        deviceChunk: deviceChunks[di],
+        window: dateWindows[wi],
+        label: `${di + 1}/${deviceChunks.length}|${wi + 1}/${dateWindows.length}`,
+      });
+    }
+  }
+  console.log(`[allinone] plan: ${deviceIds.length} devices × ${dateWindows.length} date-windows (${ALLINONE_DATE_CHUNK_DAYS}d) → ${deviceChunks.length} device-chunks of ≤${ALLINONE_CHUNK} → ${tasks.length} calls, ${ALLINONE_PARALLEL} in parallel, types=${types.join("+")}`);
   const planT0 = Date.now();
   const merged = {};
-  for (let i = 0; i < chunks.length; i += ALLINONE_PARALLEL) {
-    const batch = chunks.slice(i, i + ALLINONE_PARALLEL);
+  const totalBatches = Math.ceil(tasks.length / ALLINONE_PARALLEL);
+  for (let i = 0; i < tasks.length; i += ALLINONE_PARALLEL) {
+    const batch = tasks.slice(i, i + ALLINONE_PARALLEL);
     const batchT0 = Date.now();
-    console.log(`[allinone] batch ${Math.floor(i / ALLINONE_PARALLEL) + 1}/${Math.ceil(chunks.length / ALLINONE_PARALLEL)} → ${batch.length} chunks starting`);
+    const batchNum = Math.floor(i / ALLINONE_PARALLEL) + 1;
+    console.log(`[allinone] batch ${batchNum}/${totalBatches} → ${batch.length} calls starting`);
     const results = await Promise.all(
-      batch.map((chunk, j) => fetchAllInOneChunk(auth, chunk, from, to, types, `${i + j + 1}/${chunks.length}`))
+      batch.map(t => fetchAllInOneChunk(auth, t.deviceChunk, t.window.from, t.window.to, types, t.label))
     );
-    console.log(`[allinone] batch ${Math.floor(i / ALLINONE_PARALLEL) + 1}/${Math.ceil(chunks.length / ALLINONE_PARALLEL)} ✓ ${Date.now() - batchT0}ms`);
+    console.log(`[allinone] batch ${batchNum}/${totalBatches} ✓ ${Date.now() - batchT0}ms`);
     for (const r of results) {
       for (const key of Object.keys(r)) {
         if (Array.isArray(r[key])) {
@@ -330,7 +355,7 @@ async function fetchAllInOne(auth, deviceIds, from, to, types) {
     }
   }
   const mergedShape = Object.fromEntries(Object.keys(merged).map(k => [k, merged[k].length]));
-  console.log(`[allinone] all chunks done in ${Date.now() - planT0}ms — merged=${JSON.stringify(mergedShape)}`);
+  console.log(`[allinone] all calls done in ${Date.now() - planT0}ms — merged=${JSON.stringify(mergedShape)}`);
   return merged;
 }
 
@@ -1372,7 +1397,7 @@ app.use(express.static(path.join(__dirname, "public")));
 const SSL_CERT = process.env.SSL_CERT || "/etc/letsencrypt/live/hetzner.moviflotte.com/fullchain.pem";
 const SSL_KEY = process.env.SSL_KEY || "/etc/letsencrypt/live/hetzner.moviflotte.com/privkey.pem";
 
-console.log(`[config] ALLINONE_CHUNK=${ALLINONE_CHUNK} ALLINONE_PARALLEL=${ALLINONE_PARALLEL} ALLINONE_RETRIES=${ALLINONE_RETRIES} UPSTREAM_CONCURRENCY=${CONCURRENCY}`);
+console.log(`[config] ALLINONE_CHUNK=${ALLINONE_CHUNK} ALLINONE_PARALLEL=${ALLINONE_PARALLEL} ALLINONE_RETRIES=${ALLINONE_RETRIES} ALLINONE_DATE_CHUNK_DAYS=${ALLINONE_DATE_CHUNK_DAYS} UPSTREAM_CONCURRENCY=${CONCURRENCY} UPSTREAM_TIMEOUT_MS=${UPSTREAM_TIMEOUT_MS}`);
 
 app.listen(PORT, () => {
   console.log(`HTTP server running on http://localhost:${PORT}`);
