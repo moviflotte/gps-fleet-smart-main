@@ -263,30 +263,38 @@ const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 2);
 const ALLINONE_PARALLEL = Number(process.env.ALLINONE_PARALLEL || 3);
 const ALLINONE_RETRIES = Number(process.env.ALLINONE_RETRIES || 1);
 
-async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
+async function fetchAllInOneChunk(auth, deviceIds, from, to, types, label = "") {
   const params = new URLSearchParams();
   for (const id of deviceIds) params.append("deviceId", String(id));
   for (const t of types) params.append("type", t);
   params.append("from", from);
   params.append("to", to);
   const url = "/reports/allinone?" + params.toString();
+  const tag = `[allinone${label ? " " + label : ""}] devices=${deviceIds.length} types=${types.join("+")}`;
   for (let attempt = 0; ; attempt++) {
+    const t0 = Date.now();
+    console.log(`${tag} attempt=${attempt + 1} → start ids=${JSON.stringify(deviceIds)}`);
     try {
-      const r = await upstreamGet(url, {
-        headers: { Cookie: auth },
-      });
+      const r = await upstreamGet(url, { headers: { Cookie: auth } });
+      const ms = Date.now() - t0;
       if (r.status >= 400) {
         const body = typeof r.data === 'string' ? r.data.slice(0, 300) : JSON.stringify(r.data).slice(0, 300);
         throw new Error(`allinone ${r.status} ${url}: ${body}`);
       }
+      const shape = r.data && typeof r.data === 'object'
+        ? Object.fromEntries(Object.keys(r.data).map(k => [k, Array.isArray(r.data[k]) ? r.data[k].length : typeof r.data[k]]))
+        : { _type: typeof r.data };
+      console.log(`${tag} attempt=${attempt + 1} ✓ ${ms}ms shape=${JSON.stringify(shape)}`);
       return r.data;
     } catch (err) {
+      const ms = Date.now() - t0;
       if (attempt < ALLINONE_RETRIES) {
         const delay = (attempt + 1) * 200;
-        console.log(`[allinone] attempt ${attempt + 1} failed for ${url}, retrying in ${delay}ms: ${err.message}`);
+        console.log(`${tag} attempt=${attempt + 1} ✗ ${ms}ms — retrying in ${delay}ms: ${err.message}`);
         await new Promise(r => setTimeout(r, delay));
         continue;
       }
+      console.log(`${tag} attempt=${attempt + 1} ✗ ${ms}ms — giving up: ${err.message}`);
       throw err;
     }
   }
@@ -294,19 +302,24 @@ async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
 
 async function fetchAllInOne(auth, deviceIds, from, to, types) {
   if (deviceIds.length <= ALLINONE_CHUNK) {
-    return fetchAllInOneChunk(auth, deviceIds, from, to, types);
+    return fetchAllInOneChunk(auth, deviceIds, from, to, types, "1/1");
   }
   // Split into chunks, fetch ALLINONE_PARALLEL at a time
   const chunks = [];
   for (let i = 0; i < deviceIds.length; i += ALLINONE_CHUNK) {
     chunks.push(deviceIds.slice(i, i + ALLINONE_CHUNK));
   }
+  console.log(`[allinone] plan: ${deviceIds.length} devices → ${chunks.length} chunks of ≤${ALLINONE_CHUNK}, ${ALLINONE_PARALLEL} in parallel, types=${types.join("+")}`);
+  const planT0 = Date.now();
   const merged = {};
   for (let i = 0; i < chunks.length; i += ALLINONE_PARALLEL) {
     const batch = chunks.slice(i, i + ALLINONE_PARALLEL);
+    const batchT0 = Date.now();
+    console.log(`[allinone] batch ${Math.floor(i / ALLINONE_PARALLEL) + 1}/${Math.ceil(chunks.length / ALLINONE_PARALLEL)} → ${batch.length} chunks starting`);
     const results = await Promise.all(
-      batch.map(chunk => fetchAllInOneChunk(auth, chunk, from, to, types))
+      batch.map((chunk, j) => fetchAllInOneChunk(auth, chunk, from, to, types, `${i + j + 1}/${chunks.length}`))
     );
+    console.log(`[allinone] batch ${Math.floor(i / ALLINONE_PARALLEL) + 1}/${Math.ceil(chunks.length / ALLINONE_PARALLEL)} ✓ ${Date.now() - batchT0}ms`);
     for (const r of results) {
       for (const key of Object.keys(r)) {
         if (Array.isArray(r[key])) {
@@ -316,6 +329,8 @@ async function fetchAllInOne(auth, deviceIds, from, to, types) {
       }
     }
   }
+  const mergedShape = Object.fromEntries(Object.keys(merged).map(k => [k, merged[k].length]));
+  console.log(`[allinone] all chunks done in ${Date.now() - planT0}ms — merged=${JSON.stringify(mergedShape)}`);
   return merged;
 }
 
