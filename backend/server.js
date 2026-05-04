@@ -79,40 +79,49 @@ const ADMIN_PASS = process.env.ADMIN_PASS || "";
 /* =========================
    Upstream fetch helpers (PinMe)
 ========================= */
-async function upstreamGet(urlPath, { headers = {}, params } = {}) {
+const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 40000);
+
+async function upstreamFetch(fullUrl, init, timeoutMs = UPSTREAM_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(fullUrl, { ...init, signal: ctrl.signal });
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = text; }
+    return { status: res.status, data };
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(`upstream timeout after ${timeoutMs}ms: ${fullUrl}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function upstreamGet(urlPath, { headers = {}, params, timeoutMs } = {}) {
   const qs = params ? "?" + new URLSearchParams(params).toString() : "";
   const fullUrl = BASE + urlPath + qs;
-  const res = await fetch(fullUrl, { headers, redirect: "follow" });
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = text; }
-  return { status: res.status, data };
+  return upstreamFetch(fullUrl, { headers, redirect: "follow" }, timeoutMs);
 }
-async function upstreamPost(urlPath, body, { headers = {} } = {}) {
+async function upstreamPost(urlPath, body, { headers = {}, timeoutMs } = {}) {
   const fullUrl = BASE + urlPath;
-  const res = await fetch(fullUrl, {
+  return upstreamFetch(fullUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body),
     redirect: "follow",
-  });
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = text; }
-  return { status: res.status, data };
+  }, timeoutMs);
 }
-async function upstreamPut(urlPath, body, { headers = {} } = {}) {
+async function upstreamPut(urlPath, body, { headers = {}, timeoutMs } = {}) {
   const fullUrl = BASE + urlPath;
-  const res = await fetch(fullUrl, {
+  return upstreamFetch(fullUrl, {
     method: "PUT",
     headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body),
     redirect: "follow",
-  });
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = text; }
-  return { status: res.status, data };
+  }, timeoutMs);
 }
 
 /* =========================
@@ -252,7 +261,7 @@ app.post("/api/groups", async (req, res) => {
 ========================= */
 const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 5);
 const ALLINONE_PARALLEL = Number(process.env.ALLINONE_PARALLEL || 10);
-const ALLINONE_RETRIES = 3;
+const ALLINONE_RETRIES = Number(process.env.ALLINONE_RETRIES || 1);
 
 async function fetchAllInOneChunk(auth, deviceIds, from, to, types) {
   const params = new URLSearchParams();
@@ -345,41 +354,25 @@ app.post("/api/reports/dashboard", async (req, res) => {
     const t0 = Date.now();
     const timed = (label, promise) => promise.then(r => { console.log(`[dashboard] ${label} done in ${Date.now() - t0}ms`); return r; });
 
-    // Fetch allinone first (heavy), then remaining requests in parallel
-    const allInOne = await timed("allinone(trips+summary+events)", fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary", "events"]));
+    // Fetch everything in parallel: allinone (trips+summary), per-device events, maint, notifs, geofences
+    const [allInOne, eventsPerDevice, maintLists, notifs, geofences] = await Promise.all([
+      timed("allinone(trips+summary)", fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary"])),
+      timed(`events(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)])),
+      timed(`maint(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)])),
+      timed("notifications", getNotifications(auth)),
+      timed("geofences", getGeofences(auth)),
+    ]);
     const allInOneShape = allInOne && typeof allInOne === 'object'
       ? Object.fromEntries(Object.keys(allInOne).map(k => [k, Array.isArray(allInOne[k]) ? allInOne[k].length : typeof allInOne[k]]))
       : { _type: typeof allInOne };
     console.log(`[dashboard] allinone shape: ${JSON.stringify(allInOneShape)} | range from=${from} to=${to}`);
-    const sampleEvent = asArr(allInOne?.events)[0];
-    if (sampleEvent) {
-      console.log(`[dashboard] sample event: ${JSON.stringify(sampleEvent).slice(0, 400)}`);
-    }
-    const allInOneEvents = asArr(allInOne?.events);
-    const needsEventsFallback = allInOneEvents.length === 0;
-    if (needsEventsFallback) {
-      console.log(`[dashboard] allinone returned no events — falling back to per-device /reports/events`);
-    }
-    const [maintLists, notifs, geofences, eventsFallback] = await Promise.all([
-      timed(`maint(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)])),
-      timed("notifications", getNotifications(auth)),
-      timed("geofences", getGeofences(auth)),
-      needsEventsFallback
-        ? timed(`events-fallback(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)]))
-        : Promise.resolve(null),
-    ]);
     console.log(`[dashboard] all fetches done in ${Date.now() - t0}ms`);
 
     const tripsByDevice = groupBy(allInOne?.trips, "deviceId");
     const summaryByDevice = groupBy(allInOne?.summary, "deviceId");
-    let eventsByDevice;
-    if (eventsFallback) {
-      eventsByDevice = new Map(eventsFallback.map(([id, arr]) => [Number(id), asArr(arr)]));
-      const totalFallbackEvents = eventsFallback.reduce((s, [, arr]) => s + asArr(arr).length, 0);
-      console.log(`[dashboard] events fallback: totalEvents=${totalFallbackEvents} devicesWithEvents=${Array.from(eventsByDevice.values()).filter(a => a.length > 0).length}/${deviceIds.length}`);
-    } else {
-      eventsByDevice = groupBy(allInOne?.events, "deviceId");
-    }
+    const eventsByDevice = new Map(eventsPerDevice.map(([id, arr]) => [Number(id), asArr(arr)]));
+    const totalEvents = eventsPerDevice.reduce((s, [, arr]) => s + asArr(arr).length, 0);
+    console.log(`[dashboard] events: totalEvents=${totalEvents} devicesWithEvents=${Array.from(eventsByDevice.values()).filter(a => a.length > 0).length}/${deviceIds.length}`);
 
     // ---- average-speed ----
     const allTrips = [];
@@ -471,8 +464,7 @@ app.post("/api/reports/dashboard", async (req, res) => {
       }
       return null;
     };
-    const totalEventsRaw = asArr(allInOne?.events).length;
-    console.log(`[dashboard][alerts] notifMap=${notifMap.size} geofenceMap=${geofenceMap.size} totalEventsFromAllInOne=${totalEventsRaw} devicesWithEvents=${eventsByDevice.size}/${deviceIds.length}`);
+    console.log(`[dashboard][alerts] notifMap=${notifMap.size} geofenceMap=${geofenceMap.size} totalEvents=${totalEvents} devicesWithEvents=${eventsByDevice.size}/${deviceIds.length}`);
     const alertRows = [];
     let grandAlertOccurrences = 0;
     const eventTypeTally = new Map();
