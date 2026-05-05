@@ -138,7 +138,8 @@ export default function Dashboard() {
   const [distanceTotalKm, setDistanceTotalKm] = useState(0)
   const [maintenanceEff, setMaintenanceEff] = useState(0) // %
   const [alertsCount, setAlertsCount] = useState(0)
-  const [alertCategory, setAlertCategory] = useState<"all" | "speed" | "stop" | "brake" | "other">("all")
+  const [alertCategory, setAlertCategory] = useState<string>("all")
+  const [alertTypeCounts, setAlertTypeCounts] = useState<Record<string, number>>({})
 
   /* Données pour graphe Top Conso */
   const [fuelBars, setFuelBars] = useState<{ name: string; fuel: number }[]>([])
@@ -214,6 +215,17 @@ export default function Dashboard() {
       const rows = Array.isArray(ev?.rows) ? ev.rows : []
       const totalAlerts = Number(rows.reduce((s: number, r: any) => s + (Number(r?.alertCount) || 0), 0)) || 0
       setAlertsCount(totalAlerts)
+
+      // Compute per-type counts from raw alert labels for dynamic filter
+      const typeCounts: Record<string, number> = {}
+      for (const r of rows) {
+        const labels: string[] = Array.isArray(r?.alerts) ? r.alerts : []
+        for (const L of labels) {
+          const key = String(L)
+          typeCounts[key] = (typeCounts[key] || 0) + 1
+        }
+      }
+      setAlertTypeCounts(typeCounts)
 
       // Si le serveur renvoie un summary, on l'utilise
       if (ev?.summary) {
@@ -399,11 +411,10 @@ export default function Dashboard() {
         )}
         {visibleKpis.alerts && (() => {
           const categoryOptions = [
-            { key: "all" as const, label: "Toutes catégories", count: alertsCount },
-            { key: "speed" as const, label: "Excès de vitesse", count: violationCounts.speed },
-            { key: "stop" as const, label: "Temps d'arrêt", count: violationCounts.stop },
-            { key: "brake" as const, label: "Freinage brusque", count: violationCounts.brake },
-            { key: "other" as const, label: "Autres", count: violationCounts.other },
+            { key: "all", label: "Toutes catégories", count: alertsCount },
+            ...Object.entries(alertTypeCounts)
+              .sort((a, b) => b[1] - a[1])
+              .map(([key, count]) => ({ key, label: key, count })),
           ]
           const selected = categoryOptions.find(o => o.key === alertCategory) ?? categoryOptions[0]
           const status = selected.count > 5 ? "text-danger" : selected.count > 0 ? "text-warning" : "text-success"
@@ -415,7 +426,7 @@ export default function Dashboard() {
               </CardHeader>
               <CardContent>
                 <div className={cn("text-2xl font-bold", status)}>{selected.count}</div>
-                <Select value={alertCategory} onValueChange={(v) => setAlertCategory(v as typeof alertCategory)}>
+                <Select value={alertCategory} onValueChange={setAlertCategory}>
                   <SelectTrigger className="h-7 text-xs mt-1 px-2">
                     <SelectValue />
                   </SelectTrigger>

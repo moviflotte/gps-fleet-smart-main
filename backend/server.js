@@ -175,15 +175,20 @@ async function getGroups(auth) {
   return asArr(r.data);
 }
 async function getNotifications(auth) {
-  const r = await upstreamGet("/notifications", { headers: { Cookie: auth }, params: { all: true } });
-  if (r.status >= 400) {
-    const body = typeof r.data === 'string' ? r.data.slice(0, 200) : JSON.stringify(r.data).slice(0, 200);
-    console.warn(`[notifications] upstream ${r.status}: ${body}`);
-    return [];
+  const [r1, r2] = await Promise.allSettled([
+    upstreamGet("/notifications", { headers: { Cookie: auth }, params: { all: true } }),
+    upstreamGet("/notifications", { headers: { Cookie: auth } }),
+  ]);
+  const arr1 = r1.status === 'fulfilled' && r1.value.status < 400 ? asArr(r1.value.data) : [];
+  const arr2 = r2.status === 'fulfilled' && r2.value.status < 400 ? asArr(r2.value.data) : [];
+  const seen = new Set();
+  const merged = [];
+  for (const n of [...arr1, ...arr2]) {
+    const id = Number(n?.id);
+    if (Number.isFinite(id) && !seen.has(id)) { seen.add(id); merged.push(n); }
   }
-  const arr = asArr(r.data);
-  console.log(`[notifications] loaded ${arr.length} notifications`);
-  return arr;
+  console.log(`[notifications] loaded ${merged.length} notifications (all=${arr1.length} user=${arr2.length})`);
+  return merged;
 }
 async function getGeofences(auth) {
   const r = await upstreamGet("/geofences", { headers: { Cookie: auth }, params: { all: true } });
@@ -480,7 +485,7 @@ app.post("/api/reports/dashboard", async (req, res) => {
     const notifMap = new Map();
     for (const n of asArr(notifs)) {
       const id = Number(n?.id);
-      const label = n?.attributes?.name || n?.attributes?.alarms || n?.type || `notif:${id}`;
+      const label = n?.name || n?.attributes?.name || n?.attributes?.alarms || n?.attributes?.alarm || n?.type || `notif:${id}`;
       if (Number.isFinite(id)) notifMap.set(id, String(label));
     }
     const geofenceMap = new Map();
@@ -694,7 +699,7 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
     const notifMap = new Map();
     for (const n of asArr(notifs)) {
       const id = Number(n?.id);
-      const label = n?.attributes?.name || n?.attributes?.alarms || n?.type || `notif:${id}`;
+      const label = n?.name || n?.attributes?.name || n?.attributes?.alarms || n?.attributes?.alarm || n?.type || `notif:${id}`;
       if (Number.isFinite(id)) notifMap.set(id, String(label));
     }
     const geofenceMap = new Map();
