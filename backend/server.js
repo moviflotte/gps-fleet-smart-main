@@ -265,9 +265,9 @@ app.post("/api/groups", async (req, res) => {
    AllInOne bulk fetcher
 ========================= */
 const ALLINONE_CHUNK = Number(process.env.ALLINONE_CHUNK || 1);
-const ALLINONE_PARALLEL = Number(process.env.ALLINONE_PARALLEL || 20);
+const ALLINONE_PARALLEL = Number(process.env.ALLINONE_PARALLEL || 25);
 const ALLINONE_RETRIES = Number(process.env.ALLINONE_RETRIES || 1);
-const ALLINONE_DATE_CHUNK_DAYS = Number(process.env.ALLINONE_DATE_CHUNK_DAYS || 7);
+const ALLINONE_DATE_CHUNK_DAYS = Number(process.env.ALLINONE_DATE_CHUNK_DAYS || 6);
 
 function splitDateRange(from, to, days) {
   const fromMs = Date.parse(from);
@@ -399,12 +399,11 @@ app.post("/api/reports/dashboard", async (req, res) => {
     const t0 = Date.now();
     const timed = (label, promise) => promise.then(r => { console.log(`[dashboard] ${label} done in ${Date.now() - t0}ms`); return r; });
 
-    // Fetch everything in parallel: allinone (trips+summary), per-device events, maint, notifs, geofences
-    const [allInOne, eventsPerDevice, maintLists, notifs, geofences] = await Promise.all([
+    // Fetch everything in parallel: allinone (trips+summary), per-device events, maint, geofences
+    const [allInOne, eventsPerDevice, maintLists, geofences] = await Promise.all([
       timed("allinone(trips+summary)", fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary"])),
       timed(`events(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)])),
       timed(`maint(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)])),
-      timed("notifications", getNotifications(auth)),
       timed("geofences", getGeofences(auth)),
     ]);
     const allInOneShape = allInOne && typeof allInOne === 'object'
@@ -482,34 +481,21 @@ app.post("/api/reports/dashboard", async (req, res) => {
     const efficiency = maintTotal > 0 ? (maintOk / maintTotal) * 100 : 0;
 
     // ---- vehicle-alerts ----
-    const notifMap = new Map();
-    for (const n of asArr(notifs)) {
-      const id = Number(n?.id);
-      const label = n?.name || n?.attributes?.name || n?.attributes?.alarms || n?.attributes?.alarm || n?.type || `notif:${id}`;
-      if (Number.isFinite(id)) notifMap.set(id, String(label));
-    }
     const geofenceMap = new Map();
     for (const g of asArr(geofences)) {
       const id = Number(g?.id);
       const name = g?.name || `geofence:${id}`;
       if (Number.isFinite(id)) geofenceMap.set(id, String(name));
     }
-    const parseNotifIds = (v) => (v ? String(v).split(/[,\s]+/).map(Number).filter(Number.isFinite) : []);
     const stateLabel = (s) => (s === "en_service" ? "En service" : s === "arret" ? "Arrêt" : s === "idle" ? "Idle" : "Hors service");
     const inferStateFromEvent = (ev) => {
       const t = (ev?.type || "").toLowerCase();
       if (t === "ignitionon") return "en_service";
       if (t === "ignitionoff") return "arret";
       if (t === "alarm") { const al = (ev?.attributes?.alarm || "").toLowerCase(); if (al.includes("idle")) return "idle"; }
-      const nids = parseNotifIds(ev?.attributes?.notifications || ev?.attributes?.notificationId);
-      for (const nid of nids) {
-        const lbl = (notifMap.get(nid) || "").toLowerCase();
-        if (lbl.includes("idle")) return "idle";
-        if (lbl.includes("engineoff") || lbl.includes("engine off") || lbl.includes("arrêt") || lbl.includes("arret")) return "arret";
-      }
       return null;
     };
-    console.log(`[dashboard][alerts] notifMap=${notifMap.size} geofenceMap=${geofenceMap.size} totalEvents=${totalEvents} devicesWithEvents=${eventsByDevice.size}/${deviceIds.length}`);
+    console.log(`[dashboard][alerts] geofenceMap=${geofenceMap.size} totalEvents=${totalEvents} devicesWithEvents=${eventsByDevice.size}/${deviceIds.length}`);
     const alertRows = [];
     let grandAlertOccurrences = 0;
     const eventTypeTally = new Map();
@@ -524,9 +510,7 @@ app.post("/api/reports/dashboard", async (req, res) => {
         if (ev?.type) eventTypeTally.set(ev.type, (eventTypeTally.get(ev.type) || 0) + 1);
         if (ev?.type && ev.type !== "alarm") { const lbl = String(ev.type); if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); alertOccurrences += 1; }
         if (ev?.type === "alarm" && ev?.attributes?.alarm) { const lbl = String(ev.attributes.alarm); alarmLabelTally.set(lbl, (alarmLabelTally.get(lbl) || 0) + 1); if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); }
-        const nids = parseNotifIds(ev?.attributes?.notifications || ev?.attributes?.notificationId);
-        nids.forEach((nid) => { const lbl = notifMap.get(nid) || `notif:${nid}`; if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); });
-        if (ev?.type === "alarm") alertOccurrences += nids.length > 0 ? nids.length : 1;
+        if (ev?.type === "alarm") alertOccurrences += 1;
         const gid = Number(ev?.geofenceId);
         if (Number.isFinite(gid) && gid > 0) geosSet.add(geofenceMap.get(gid) || `geofence:${gid}`);
         const st = inferStateFromEvent(ev);
@@ -695,13 +679,7 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
   if (!from || !to) return res.status(400).json({ ok: false, error: "missing_range" });
 
   try {
-    const [notifs, geofences] = await Promise.all([getNotifications(auth), getGeofences(auth)]);
-    const notifMap = new Map();
-    for (const n of asArr(notifs)) {
-      const id = Number(n?.id);
-      const label = n?.name || n?.attributes?.name || n?.attributes?.alarms || n?.attributes?.alarm || n?.type || `notif:${id}`;
-      if (Number.isFinite(id)) notifMap.set(id, String(label));
-    }
+    const geofences = await getGeofences(auth);
     const geofenceMap = new Map();
     for (const g of asArr(geofences)) {
       const id = Number(g?.id);
@@ -709,7 +687,6 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
       if (Number.isFinite(id)) geofenceMap.set(id, String(name));
     }
 
-    const parseNotifIds = (v) => (v ? String(v).split(/[,\s]+/).map(Number).filter(Number.isFinite) : []);
     const stateLabel = (s) => (s === "en_service" ? "En service" : s === "arret" ? "Arrêt" : s === "idle" ? "Idle" : "Hors service");
     const inferStateFromEvent = (ev) => {
       const t = (ev?.type || "").toLowerCase();
@@ -718,12 +695,6 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
       if (t === "alarm") {
         const al = (ev?.attributes?.alarm || "").toLowerCase();
         if (al.includes("idle")) return "idle";
-      }
-      const ids = parseNotifIds(ev?.attributes?.notifications || ev?.attributes?.notificationId);
-      for (const id of ids) {
-        const lbl = (notifMap.get(id) || "").toLowerCase();
-        if (lbl.includes("idle")) return "idle";
-        if (lbl.includes("engineoff") || lbl.includes("engine off") || lbl.includes("arrêt") || lbl.includes("arret")) return "arret";
       }
       return null;
     };
@@ -749,12 +720,7 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
           const lbl = String(ev.attributes.alarm);
           if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime);
         }
-        const ids = parseNotifIds(ev?.attributes?.notifications || ev?.attributes?.notificationId);
-        ids.forEach((nid) => {
-          const lbl = notifMap.get(nid) || `notif:${nid}`;
-          if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime);
-        });
-        if (ev?.type === "alarm") alertOccurrences += ids.length > 0 ? ids.length : 1;
+        if (ev?.type === "alarm") alertOccurrences += 1;
         const gid = Number(ev?.geofenceId);
         if (Number.isFinite(gid) && gid > 0) geosSet.add(geofenceMap.get(gid) || `geofence:${gid}`);
 
