@@ -197,8 +197,11 @@ export default function Dashboard() {
       setTotalDevices(ids.length)
       if (ids.length === 0) throw new Error("Aucun véhicule trouvé")
 
-      // 2) Single dashboard call (all KPIs computed server-side in parallel)
-      const d = await api.dashboard(ids, fromISO, toISO)
+      // 2) Dashboard KPIs + vehicle alerts fetched in parallel (events are expensive, kept separate)
+      const [d, evResponse] = await Promise.all([
+        api.dashboard(ids, fromISO, toISO),
+        api.vehicleAlerts(ids, fromISO, toISO),
+      ])
 
       setSpeedAvg(Number(d?.averageSpeed?.averageSpeed || 0))
       setSpeedMax(Number(d?.maxSpeed?.maxSpeed || 0))
@@ -209,7 +212,7 @@ export default function Dashboard() {
       setMaintenanceEff(Number(d?.maintenance?.efficiency || 0))
 
       const fuel = d?.avgFuel
-      const ev = d?.vehicleAlerts
+      const ev = evResponse
 
       // --------- Alerts : comptages réels & breakdowns ----------
       const rows = Array.isArray(ev?.rows) ? ev.rows : []

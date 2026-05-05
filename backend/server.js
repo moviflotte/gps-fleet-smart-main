@@ -383,10 +383,9 @@ app.post("/api/reports/dashboard", async (req, res) => {
     const t0 = Date.now();
     const timed = (label, promise) => promise.then(r => { console.log(`[dashboard] ${label} done in ${Date.now() - t0}ms`); return r; });
 
-    // Fetch everything in parallel: allinone (trips+summary), per-device events, maint
-    const [allInOne, eventsPerDevice, maintLists] = await Promise.all([
+    // Fetch trips+summary and maintenance in parallel (events fetched separately by the frontend)
+    const [allInOne, maintLists] = await Promise.all([
       timed("allinone(trips+summary)", fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary"])),
-      timed(`events(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)])),
       timed(`maint(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)])),
     ]);
     const allInOneShape = allInOne && typeof allInOne === 'object'
@@ -397,9 +396,6 @@ app.post("/api/reports/dashboard", async (req, res) => {
 
     const tripsByDevice = groupBy(allInOne?.trips, "deviceId");
     const summaryByDevice = groupBy(allInOne?.summary, "deviceId");
-    const eventsByDevice = new Map(eventsPerDevice.map(([id, arr]) => [Number(id), asArr(arr)]));
-    const totalEvents = eventsPerDevice.reduce((s, [, arr]) => s + asArr(arr).length, 0);
-    console.log(`[dashboard] events: totalEvents=${totalEvents} devicesWithEvents=${Array.from(eventsByDevice.values()).filter(a => a.length > 0).length}/${deviceIds.length}`);
 
     // ---- average-speed ----
     const allTrips = [];
@@ -463,46 +459,6 @@ app.post("/api/reports/dashboard", async (req, res) => {
     }
     const efficiency = maintTotal > 0 ? (maintOk / maintTotal) * 100 : 0;
 
-    // ---- vehicle-alerts ----
-    const stateLabel = (s) => (s === "en_service" ? "En service" : s === "arret" ? "Arrêt" : s === "idle" ? "Idle" : "Hors service");
-    const inferStateFromEvent = (ev) => {
-      const t = (ev?.type || "").toLowerCase();
-      if (t === "ignitionon") return "en_service";
-      if (t === "ignitionoff") return "arret";
-      if (t === "alarm") { const al = (ev?.attributes?.alarm || "").toLowerCase(); if (al.includes("idle")) return "idle"; }
-      return null;
-    };
-    console.log(`[dashboard][alerts] totalEvents=${totalEvents} devicesWithEvents=${eventsByDevice.size}/${deviceIds.length}`);
-    const alertRows = [];
-    let grandAlertOccurrences = 0;
-    const eventTypeTally = new Map();
-    const alarmLabelTally = new Map();
-    for (const [id, arr0] of eventsByDevice) {
-      const arr = arr0.slice().sort((a, b) => (Date.parse(a?.serverTime) || 0) - (Date.parse(b?.serverTime) || 0));
-      const alertsMap = new Map();
-      let alertOccurrences = 0, lastState = null, lastTs = 0;
-      for (const ev of arr) {
-        const evTime = ev?.serverTime || null;
-        if (ev?.type) eventTypeTally.set(ev.type, (eventTypeTally.get(ev.type) || 0) + 1);
-        if (ev?.type && ev.type !== "alarm") { const lbl = String(ev.type); if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); alertOccurrences += 1; }
-        if (ev?.type === "alarm" && ev?.attributes?.alarm) { const lbl = String(ev.attributes.alarm); alarmLabelTally.set(lbl, (alarmLabelTally.get(lbl) || 0) + 1); if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); }
-        if (ev?.type === "alarm") alertOccurrences += 1;
-        const st = inferStateFromEvent(ev);
-        const ts = Date.parse(ev?.serverTime) || 0;
-        if (st && ts >= lastTs) { lastState = st; lastTs = ts; }
-      }
-      if (!lastState) lastState = arr.length ? "en_service" : "hors_service";
-      const alertEntries = Array.from(alertsMap.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([label, time]) => ({ label, time }));
-      grandAlertOccurrences += alertOccurrences;
-      if (alertOccurrences > 0 || alertEntries.length > 0) {
-        console.log(`[dashboard][alerts] device=${id} events=${arr.length} alertOccurrences=${alertOccurrences} distinctLabels=${alertEntries.length} labels=${JSON.stringify(alertEntries.map(e => e.label))}`);
-      }
-      alertRows.push({ deviceId: id, alerts: alertEntries.map(e => e.label), alertTimes: Object.fromEntries(alertEntries.map(e => [e.label, e.time])), alertCount: alertOccurrences, state: lastState, stateLabel: stateLabel(lastState) });
-    }
-    const topEventTypes = Array.from(eventTypeTally.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
-    const topAlarmLabels = Array.from(alarmLabelTally.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
-    console.log(`[dashboard][alerts] summary: rows=${alertRows.length} grandAlertOccurrences=${grandAlertOccurrences} topEventTypes=${JSON.stringify(topEventTypes)} topAlarmLabels=${JSON.stringify(topAlarmLabels)}`);
-
     console.log(`[dashboard] compute done in ${Date.now() - t0}ms | ${deviceIds.length} devices`);
 
     res.json({
@@ -513,7 +469,6 @@ app.post("/api/reports/dashboard", async (req, res) => {
       activeDevices: { count: activeSet.size, activeDeviceIds: Array.from(activeSet) },
       totalDistance: { totalKm: totalDistance / 1000 },
       maintenance: { efficiency },
-      vehicleAlerts: { rows: alertRows, count: alertRows.length },
     });
   } catch (e) {
     console.error(`[dashboard] error:`, e.message);
