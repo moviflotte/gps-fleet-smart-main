@@ -192,6 +192,21 @@ async function getEvents(auth, deviceId, from, to) {
   }
   return asArr(r.data);
 }
+const EVENTS_CHUNK_MS = 15 * 24 * 60 * 60 * 1000; // 15-day windows
+async function getEventsSplit(auth, deviceId, from, to) {
+  const fromMs = Date.parse(from);
+  const toMs = Date.parse(to);
+  if (toMs - fromMs <= EVENTS_CHUNK_MS) return getEvents(auth, deviceId, from, to);
+  const chunks = [];
+  let cursor = fromMs;
+  while (cursor < toMs) {
+    const end = Math.min(cursor + EVENTS_CHUNK_MS, toMs);
+    chunks.push({ from: new Date(cursor).toISOString(), to: new Date(end).toISOString() });
+    cursor = end;
+  }
+  const results = await Promise.all(chunks.map(c => getEvents(auth, deviceId, c.from, c.to)));
+  return results.flat();
+}
 async function getMaint(auth, deviceId) {
   const r = await upstreamGet("/maintenance", { headers: { Cookie: auth }, params: { deviceId } });
   if (r.status >= 400) return [];
@@ -629,7 +644,7 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
     };
 
     const rows = [];
-    const lists = await runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)]);
+    const lists = await runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEventsSplit(auth, id, from, to)]);
     for (const [id, arr0] of lists) {
       const arr = arr0.slice().sort((a, b) => (Date.parse(a?.serverTime) || 0) - (Date.parse(b?.serverTime) || 0));
       const alertsMap = new Map();
