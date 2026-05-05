@@ -205,7 +205,13 @@ async function getEventsSplit(auth, deviceId, from, to) {
     cursor = end;
   }
   const results = await Promise.all(chunks.map(c => getEvents(auth, deviceId, c.from, c.to)));
-  return results.flat();
+  const seen = new Set();
+  return results.flat().filter(ev => {
+    const key = ev?.id ?? `${ev?.serverTime}|${ev?.type}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 async function getMaint(auth, deviceId) {
   const r = await upstreamGet("/maintenance", { headers: { Cookie: auth }, params: { deviceId } });
