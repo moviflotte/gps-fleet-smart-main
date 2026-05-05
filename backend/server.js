@@ -174,22 +174,6 @@ async function getGroups(auth) {
   if (r.status >= 400) throw new Error(`groups ${r.status}`);
   return asArr(r.data);
 }
-async function getNotifications(auth) {
-  const [r1, r2] = await Promise.allSettled([
-    upstreamGet("/notifications", { headers: { Cookie: auth }, params: { all: true } }),
-    upstreamGet("/notifications", { headers: { Cookie: auth } }),
-  ]);
-  const arr1 = r1.status === 'fulfilled' && r1.value.status < 400 ? asArr(r1.value.data) : [];
-  const arr2 = r2.status === 'fulfilled' && r2.value.status < 400 ? asArr(r2.value.data) : [];
-  const seen = new Set();
-  const merged = [];
-  for (const n of [...arr1, ...arr2]) {
-    const id = Number(n?.id);
-    if (Number.isFinite(id) && !seen.has(id)) { seen.add(id); merged.push(n); }
-  }
-  console.log(`[notifications] loaded ${merged.length} notifications (all=${arr1.length} user=${arr2.length})`);
-  return merged;
-}
 async function getGeofences(auth) {
   const r = await upstreamGet("/geofences", { headers: { Cookie: auth }, params: { all: true } });
   if (r.status >= 400) {
@@ -399,12 +383,11 @@ app.post("/api/reports/dashboard", async (req, res) => {
     const t0 = Date.now();
     const timed = (label, promise) => promise.then(r => { console.log(`[dashboard] ${label} done in ${Date.now() - t0}ms`); return r; });
 
-    // Fetch everything in parallel: allinone (trips+summary), per-device events, maint, geofences
-    const [allInOne, eventsPerDevice, maintLists, geofences] = await Promise.all([
+    // Fetch everything in parallel: allinone (trips+summary), per-device events, maint
+    const [allInOne, eventsPerDevice, maintLists] = await Promise.all([
       timed("allinone(trips+summary)", fetchAllInOne(auth, deviceIds, from, to, ["trips", "summary"])),
       timed(`events(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getEvents(auth, id, from, to)])),
       timed(`maint(${deviceIds.length} devices)`, runPool(deviceIds, CONCURRENCY, async (id) => [id, await getMaint(auth, id)])),
-      timed("geofences", getGeofences(auth)),
     ]);
     const allInOneShape = allInOne && typeof allInOne === 'object'
       ? Object.fromEntries(Object.keys(allInOne).map(k => [k, Array.isArray(allInOne[k]) ? allInOne[k].length : typeof allInOne[k]]))
@@ -481,12 +464,6 @@ app.post("/api/reports/dashboard", async (req, res) => {
     const efficiency = maintTotal > 0 ? (maintOk / maintTotal) * 100 : 0;
 
     // ---- vehicle-alerts ----
-    const geofenceMap = new Map();
-    for (const g of asArr(geofences)) {
-      const id = Number(g?.id);
-      const name = g?.name || `geofence:${id}`;
-      if (Number.isFinite(id)) geofenceMap.set(id, String(name));
-    }
     const stateLabel = (s) => (s === "en_service" ? "En service" : s === "arret" ? "Arrêt" : s === "idle" ? "Idle" : "Hors service");
     const inferStateFromEvent = (ev) => {
       const t = (ev?.type || "").toLowerCase();
@@ -495,7 +472,7 @@ app.post("/api/reports/dashboard", async (req, res) => {
       if (t === "alarm") { const al = (ev?.attributes?.alarm || "").toLowerCase(); if (al.includes("idle")) return "idle"; }
       return null;
     };
-    console.log(`[dashboard][alerts] geofenceMap=${geofenceMap.size} totalEvents=${totalEvents} devicesWithEvents=${eventsByDevice.size}/${deviceIds.length}`);
+    console.log(`[dashboard][alerts] totalEvents=${totalEvents} devicesWithEvents=${eventsByDevice.size}/${deviceIds.length}`);
     const alertRows = [];
     let grandAlertOccurrences = 0;
     const eventTypeTally = new Map();
@@ -503,7 +480,6 @@ app.post("/api/reports/dashboard", async (req, res) => {
     for (const [id, arr0] of eventsByDevice) {
       const arr = arr0.slice().sort((a, b) => (Date.parse(a?.serverTime) || 0) - (Date.parse(b?.serverTime) || 0));
       const alertsMap = new Map();
-      const geosSet = new Set();
       let alertOccurrences = 0, lastState = null, lastTs = 0;
       for (const ev of arr) {
         const evTime = ev?.serverTime || null;
@@ -511,8 +487,6 @@ app.post("/api/reports/dashboard", async (req, res) => {
         if (ev?.type && ev.type !== "alarm") { const lbl = String(ev.type); if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); alertOccurrences += 1; }
         if (ev?.type === "alarm" && ev?.attributes?.alarm) { const lbl = String(ev.attributes.alarm); alarmLabelTally.set(lbl, (alarmLabelTally.get(lbl) || 0) + 1); if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime); }
         if (ev?.type === "alarm") alertOccurrences += 1;
-        const gid = Number(ev?.geofenceId);
-        if (Number.isFinite(gid) && gid > 0) geosSet.add(geofenceMap.get(gid) || `geofence:${gid}`);
         const st = inferStateFromEvent(ev);
         const ts = Date.parse(ev?.serverTime) || 0;
         if (st && ts >= lastTs) { lastState = st; lastTs = ts; }
@@ -523,7 +497,7 @@ app.post("/api/reports/dashboard", async (req, res) => {
       if (alertOccurrences > 0 || alertEntries.length > 0) {
         console.log(`[dashboard][alerts] device=${id} events=${arr.length} alertOccurrences=${alertOccurrences} distinctLabels=${alertEntries.length} labels=${JSON.stringify(alertEntries.map(e => e.label))}`);
       }
-      alertRows.push({ deviceId: id, alerts: alertEntries.map(e => e.label), alertTimes: Object.fromEntries(alertEntries.map(e => [e.label, e.time])), geofences: Array.from(geosSet).sort((a, b) => a.localeCompare(b)), alertCount: alertOccurrences, geofenceCount: geosSet.size, state: lastState, stateLabel: stateLabel(lastState) });
+      alertRows.push({ deviceId: id, alerts: alertEntries.map(e => e.label), alertTimes: Object.fromEntries(alertEntries.map(e => [e.label, e.time])), alertCount: alertOccurrences, state: lastState, stateLabel: stateLabel(lastState) });
     }
     const topEventTypes = Array.from(eventTypeTally.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
     const topAlarmLabels = Array.from(alarmLabelTally.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
