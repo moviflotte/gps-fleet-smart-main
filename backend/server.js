@@ -663,12 +663,14 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
         const evTime = ev?.serverTime || null;
         if (ev?.type && ev.type !== "alarm") {
           const lbl = String(ev.type);
-          if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime);
+          const ex = alertsMap.get(lbl) || { count: 0, time: null };
+          alertsMap.set(lbl, { count: ex.count + 1, time: evTime > (ex.time || '') ? evTime : ex.time });
           alertOccurrences += 1;
         }
         if (ev?.type === "alarm" && ev?.attributes?.alarm) {
           const lbl = String(ev.attributes.alarm);
-          if (!alertsMap.has(lbl) || evTime > alertsMap.get(lbl)) alertsMap.set(lbl, evTime);
+          const ex = alertsMap.get(lbl) || { count: 0, time: null };
+          alertsMap.set(lbl, { count: ex.count + 1, time: evTime > (ex.time || '') ? evTime : ex.time });
         }
         if (ev?.type === "alarm") alertOccurrences += 1;
         const gid = Number(ev?.geofenceId);
@@ -682,11 +684,12 @@ app.post("/api/reports/vehicle-alerts", async (req, res) => {
 
       const alertEntries = Array.from(alertsMap.entries())
         .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([label, time]) => ({ label, time }));
+        .map(([label, { count, time }]) => ({ label, count, time }));
 
       rows.push({
         deviceId: id,
         alerts: alertEntries.map(e => e.label),
+        alertCounts: Object.fromEntries(alertEntries.map(e => [e.label, e.count])),
         alertTimes: Object.fromEntries(alertEntries.map(e => [e.label, e.time])),
         geofences: Array.from(geosSet).sort((a, b) => a.localeCompare(b)),
         alertCount: alertOccurrences,

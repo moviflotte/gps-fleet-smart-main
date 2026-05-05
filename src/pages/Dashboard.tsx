@@ -255,15 +255,14 @@ export default function Dashboard() {
           // état du véhicule (dernier état connu pour la période)
           st[stateKeyToBucket(r?.state)]++
 
-          // catégories d'alertes (pondérées par occurrences si dispo)
-          const weight = Number(r?.alertCount) || 1
+          const alertCounts: Record<string, number> = r?.alertCounts ?? {}
           const labels: string[] = Array.isArray(r?.alerts) ? r.alerts : []
           if (labels.length === 0) {
-            cat.other += weight
+            cat.other += Number(r?.alertCount) || 0
           } else {
             for (const L of labels) {
               const k = classifyAlert(String(L))
-              ;(cat as any)[k] += 1 // 1 par type distinct
+              ;(cat as any)[k] += alertCounts[L] ?? 1
             }
           }
         }
