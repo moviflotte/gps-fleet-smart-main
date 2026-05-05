@@ -222,10 +222,11 @@ export default function Dashboard() {
       // Compute per-type counts from raw alert labels for dynamic filter
       const typeCounts: Record<string, number> = {}
       for (const r of rows) {
+        const alertCounts: Record<string, number> = r?.alertCounts ?? {}
         const labels: string[] = Array.isArray(r?.alerts) ? r.alerts : []
         for (const L of labels) {
           const key = String(L)
-          typeCounts[key] = (typeCounts[key] || 0) + 1
+          typeCounts[key] = (typeCounts[key] || 0) + (alertCounts[L] ?? 1)
         }
       }
       setAlertTypeCounts(typeCounts)
